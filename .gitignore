@@ -1,0 +1,25 @@
+# Forge / Foundry
+
+# Build output
+out/
+
+# Cache files
+cache/
+
+# Artifacts and build info
+artifacts/
+
+# Environment variables
+.env
+
+# VS Code settings
+.vscode/
+
+# Logs
+*.log
+
+# Node modules (if used with any JS tooling)
+node_modules/
+
+# Coverage reports (if you generate test coverage)
+coverage/

@@ -1310,10 +1310,12 @@ function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
 
     /**
      * @notice Internal function to permanently remove all taxes when burn threshold is reached
-     * @dev Automatically called when burnedTokens >= BURN_THRESHOLD
+     * @dev Automatically called when burnedTokens >= BURN_THRESHOLD (75% of total supply)
      * @dev Sets both buyTax and sellTax to 0% permanently - this action cannot be reversed
      * @dev Emits TaxesRemoved event to notify of this significant tokenomics change
      * @dev This creates a deflationary token that becomes fee-free once enough is burned
+     * @dev SECURITY: Function is only called automatically, no manual override possible
+     * @dev INVARIANT: taxesRemoved flag prevents duplicate execution
      */
     function _removeTaxes() internal {
         require(!taxesRemoved, "Taxes already removed");
@@ -1321,10 +1323,6 @@ function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
         sellTax = 0;
         taxesRemoved = true;
         emit TaxesRemoved();
-    }
-
-    function removeTaxes() external onlyOwner {
-        _removeTaxes();
     }
 
     function renounceContract() external onlyOwner {
@@ -1382,10 +1380,18 @@ function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
         emit DexPairUpdated(_pair, _status);
     }
 
+    /**
+     * @notice Returns current buy tax percentage
+     * @return uint256 Current buy tax rate (0-100)
+     */
     function getBuyTax() public view returns (uint256) {
         return buyTax;
     }
 
+    /**
+     * @notice Returns current sell tax percentage  
+     * @return uint256 Current sell tax rate (0-100)
+     */
     function getSellTax() public view returns (uint256) {
         return sellTax;
     }

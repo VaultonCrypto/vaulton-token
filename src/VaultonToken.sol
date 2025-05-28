@@ -68,7 +68,6 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     // Mappings
     mapping(address => bool) public isDexPair;
     mapping(address => bool) private isExcludedFromFees;
-    mapping(address => bool) private isBlacklisted;
     bool private inSwapAndLiquify;
     bool public taxesRemoved;
 
@@ -340,9 +339,6 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
         bool isDexPairTo = isDexPair[to];
         bool isDexPairFrom = isDexPair[from];
 
-        // Ensure neither sender nor receiver is blacklisted
-        require(!isBlacklisted[from] && !isBlacklisted[to], "Blacklisted");
-
         // Check max transaction limit
         if (!isExcludedFrom && !isExcludedTo && !isDexPairFrom && !isDexPairTo) {
             require(amount <= MAX_TX_AMOUNT, "Max tx");
@@ -528,32 +524,6 @@ function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
 
     function renounceContract() external onlyOwner {
         renounceOwnership();
-    }
-
-    function blacklistAddress(address _address, bool _status) external onlyOwner {
-        isBlacklisted[_address] = _status;
-    }
-
-    /**
-     * @notice Blacklist multiple addresses at once
-     * @param addresses Array of addresses to blacklist
-     * @param status True to blacklist, false to remove from blacklist
-     */
-    function blacklistAddresses(address[] memory addresses, bool status) external onlyOwner {
-        require(addresses.length > 0, "Empty array");
-        for(uint256 i = 0; i < addresses.length; i++) {
-            require(addresses[i] != address(0), "Zero address");
-            isBlacklisted[addresses[i]] = status;
-        }
-    }
-
-    /**
-     * @notice Check if an address is blacklisted
-     * @param _address Address to check
-     * @return bool True if address is blacklisted
-     */
-    function getBlacklistStatus(address _address) public view returns (bool) {
-        return isBlacklisted[_address];
     }
 
     function excludeFromFees(address _address, bool _status) public onlyOwner {

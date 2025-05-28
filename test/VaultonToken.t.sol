@@ -473,17 +473,18 @@ contract VaultonTest is Test {
         // Verify taxes are removed
         assertTrue(vaulton.taxesRemoved(), "Taxes should be removed");
         
-        // Try to trigger removal again (should not fail but should not change anything)
+        // Record state before additional burn
         uint256 initialBurnedTokens = vaulton.burnedTokens();
         
         // Burn more tokens
         vm.prank(owner);
         vaulton.burn(owner, 1000 * 10**18);
         
-        // Tax status should remain unchanged
+        // Tax status should remain unchanged AND burned counter should increase
         assertTrue(vaulton.taxesRemoved(), "Taxes should still be removed");
         assertEq(vaulton.getBuyTax(), 0, "Buy tax should still be 0");
         assertEq(vaulton.getSellTax(), 0, "Sell tax should still be 0");
+        assertEq(vaulton.burnedTokens(), initialBurnedTokens + 1000 * 10**18, "Burn counter should increase");
     }
     
     /**
@@ -542,89 +543,6 @@ contract VaultonTest is Test {
     // SECURITY & ACCESS CONTROL TESTS
     // ========================================
     
-    /**
-     * @notice Tests blacklist functionality for address restriction
-     * @dev Verifies bidirectional blacklist enforcement (can't send/receive)
-     * @dev Tests blacklist addition, removal, and transfer blocking
-     */
-    function testBlacklist() public {
-        // Pre-fund the router with sufficient ETH for all swap-related tests
-        vm.deal(address(mockRouter), 100 ether);
-
-        vm.prank(owner);
-        vaulton.blacklistAddress(trader, true);
-
-        vm.expectRevert("Blacklisted");
-        vm.prank(trader);
-        vaulton.transfer(user, 1000 * 10**18);
-    }
-
-    /**
-     * @notice Tests blacklist functionality for single addresses
-     * @dev Verifies individual address blacklisting and status checking
-     */
-    function testBlacklistAddress() public {
-        vm.prank(owner);
-        vaulton.blacklistAddress(user, true);
-        assertTrue(vaulton.getBlacklistStatus(user), "User not blacklisted");
-        vm.prank(owner);
-        vaulton.blacklistAddress(user, false);
-        assertFalse(vaulton.getBlacklistStatus(user), "User still blacklisted");
-    }
-
-    /**
-     * @notice Tests bulk blacklist operations for multiple addresses
-     * @dev Verifies batch blacklisting and unblocklisting functionality
-     */
-    function testBlacklistAddresses() public {
-        address[] memory accounts = new address[](2);
-        accounts[0] = user;
-        accounts[1] = trader;
-        vm.prank(owner);
-        vaulton.blacklistAddresses(accounts, true);
-        assertTrue(vaulton.getBlacklistStatus(user), "User not blacklisted");
-        assertTrue(vaulton.getBlacklistStatus(trader), "Trader not blacklisted");
-        vm.prank(owner);
-        vaulton.blacklistAddresses(accounts, false);
-        assertFalse(vaulton.getBlacklistStatus(user), "User still blacklisted");
-        assertFalse(vaulton.getBlacklistStatus(trader), "Trader still blacklisted");
-    }
-
-    /**
-     * @notice Tests bidirectional blacklist enforcement
-     * @dev Verifies blacklisted addresses cannot send or receive tokens
-     * @dev Tests both directions of transfer blocking
-     */
-    function testBlacklistBidirectional() public {
-        // Disable automatic swapping to test only blacklist functionality
-        vm.prank(owner);
-        vaulton.setSwapEnabled(false);
-        
-        // Set up router to avoid failures on other operations
-        vm.deal(address(mockRouter), 100 ether);
-        mockRouter.setForceRevert(false);
-        
-        // Test both directions of blacklist
-        vm.prank(owner);
-        vaulton.blacklistAddress(trader, true);
-        
-        // Blacklisted account can't send
-        vm.expectRevert("Blacklisted");
-        vm.prank(trader);
-        vaulton.transfer(user, 100);
-        
-        // Accounts can't send to blacklisted account
-        vm.expectRevert("Blacklisted");
-        vm.prank(user);
-        vaulton.transfer(trader, 100);
-        
-        // Unblacklist and verify it works again
-        vm.prank(owner);
-        vaulton.blacklistAddress(trader, false);
-        
-        vm.prank(user);
-        vaulton.transfer(trader, 100);
-    }
 
     /**
      * @notice Tests maximum transaction limit enforcement
@@ -1119,30 +1037,6 @@ contract VaultonTest is Test {
         vm.expectRevert("ERC20: transfer to the zero address");
         vm.prank(trader);
         vaulton.transfer(address(0), amount);
-    }
-
-    // Tests for error conditions (require statements)
-    function testMaxTransactionLimitExact() public {
-        uint256 maxAmount = vaulton.getMaxTransactionAmount();
-
-        // Ensure trader has enough tokens
-        vm.startPrank(owner);
-        vaulton.excludeFromFees(owner, true); // Avoid tax when transferring to trader
-        vaulton.transfer(trader, maxAmount * 2); // Transfer enough tokens
-        vm.stopPrank();
-
-        // Disable automatic swaps
-        vm.prank(owner);
-        vaulton.setSwapEnabled(false);
-
-        // This should succeed - exactly at the limit
-        vm.prank(trader);
-        vaulton.transfer(user, maxAmount);
-
-        // This should fail - 1 over the limit
-        vm.expectRevert("Max tx");
-        vm.prank(trader);
-        vaulton.transfer(user, maxAmount + 1);
     }
     
     /**

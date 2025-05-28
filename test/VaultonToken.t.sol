@@ -414,14 +414,15 @@ contract VaultonTest is Test {
      * @dev Critical test for the deflationary tokenomics feature
      */
     function testBurnThresholdMechanism() public {
-        uint256 amountToBurn = vaulton.BURN_THRESHOLD() - vaulton.burnedTokens();
+        uint256 amountToBurn = vaulton.BURN_THRESHOLD() - vaulton.getBurnedTokens();
 
-        // Pre-fund the router with sufficient ETH for all swap-related tests
-        vm.deal(address(mockRouter), 100 ether);
-
-        // Perform a burn to reach the threshold
+        // ✅ CORRECTION : Transférer les tokens au contrat avant de les brûler
         vm.prank(owner);
-        vaulton.burn(owner, amountToBurn);
+        vaulton.transfer(address(vaulton), amountToBurn);
+
+        // Maintenant brûler depuis le contrat
+        vm.prank(owner);
+        vaulton.burn(address(vaulton), amountToBurn);
 
         // Verify that taxes are removed
         assertTrue(vaulton.taxesRemoved());
@@ -436,7 +437,7 @@ contract VaultonTest is Test {
      */
     function testAutomaticTaxRemovalAtThreshold() public {
         // Calculate exact amount to reach threshold
-        uint256 currentBurned = vaulton.burnedTokens();
+        uint256 currentBurned = vaulton.getBurnedTokens();
         uint256 burnThreshold = vaulton.BURN_THRESHOLD();
         uint256 amountToBurn = burnThreshold - currentBurned;
         
@@ -445,15 +446,19 @@ contract VaultonTest is Test {
         assertGt(vaulton.getSellTax(), 0, "Sell tax should be active");
         assertFalse(vaulton.taxesRemoved(), "Taxes should not be removed yet");
         
+        // ✅ CORRECTION : Transférer au contrat puis brûler
+        vm.prank(owner);
+        vaulton.transfer(address(vaulton), amountToBurn);
+        
         // Burn to reach threshold
         vm.prank(owner);
-        vaulton.burn(owner, amountToBurn);
+        vaulton.burn(address(vaulton), amountToBurn);
         
         // Verify automatic tax removal
         assertTrue(vaulton.taxesRemoved(), "Taxes should be removed automatically");
         assertEq(vaulton.getBuyTax(), 0, "Buy tax should be 0");
         assertEq(vaulton.getSellTax(), 0, "Sell tax should be 0");
-        assertEq(vaulton.burnedTokens(), burnThreshold, "Burned tokens should equal threshold");
+        assertEq(vaulton.getBurnedTokens(), burnThreshold, "Burned tokens should equal threshold");
     }
     
     /**
@@ -463,28 +468,36 @@ contract VaultonTest is Test {
      */
     function testTaxRemovalIsIrreversible() public {
         // Reach burn threshold
-        uint256 currentBurned = vaulton.burnedTokens();
+        uint256 currentBurned = vaulton.getBurnedTokens();
         uint256 burnThreshold = vaulton.BURN_THRESHOLD();
         uint256 amountToBurn = burnThreshold - currentBurned;
         
+        // ✅ CORRECTION : Transférer au contrat puis brûler
         vm.prank(owner);
-        vaulton.burn(owner, amountToBurn);
+        vaulton.transfer(address(vaulton), amountToBurn);
+        
+        vm.prank(owner);
+        vaulton.burn(address(vaulton), amountToBurn);
         
         // Verify taxes are removed
         assertTrue(vaulton.taxesRemoved(), "Taxes should be removed");
         
         // Record state before additional burn
-        uint256 initialBurnedTokens = vaulton.burnedTokens();
+        uint256 initialBurnedTokens = vaulton.getBurnedTokens();
+        
+        // ✅ CORRECTION : Transférer plus de tokens au contrat puis brûler
+        vm.prank(owner);
+        vaulton.transfer(address(vaulton), 1000 * 10**18);
         
         // Burn more tokens
         vm.prank(owner);
-        vaulton.burn(owner, 1000 * 10**18);
+        vaulton.burn(address(vaulton), 1000 * 10**18);
         
         // Tax status should remain unchanged AND burned counter should increase
         assertTrue(vaulton.taxesRemoved(), "Taxes should still be removed");
         assertEq(vaulton.getBuyTax(), 0, "Buy tax should still be 0");
         assertEq(vaulton.getSellTax(), 0, "Sell tax should still be 0");
-        assertEq(vaulton.burnedTokens(), initialBurnedTokens + 1000 * 10**18, "Burn counter should increase");
+        assertEq(vaulton.getBurnedTokens(), initialBurnedTokens + 1000 * 10**18, "Burn counter should increase");
     }
     
     /**
@@ -496,12 +509,16 @@ contract VaultonTest is Test {
         uint256 amount = 1000 * 10**18;
         
         // Reach burn threshold
-        uint256 currentBurned = vaulton.burnedTokens();
+        uint256 currentBurned = vaulton.getBurnedTokens();
         uint256 burnThreshold = vaulton.BURN_THRESHOLD();
         uint256 amountToBurn = burnThreshold - currentBurned;
         
+        // ✅ CORRECTION : Transférer au contrat puis brûler
         vm.prank(owner);
-        vaulton.burn(owner, amountToBurn);
+        vaulton.transfer(address(vaulton), amountToBurn);
+        
+        vm.prank(owner);
+        vaulton.burn(address(vaulton), amountToBurn);
         
         // Test that transfers have no taxes
         uint256 initialUserBalance = vaulton.balanceOf(user);
@@ -522,13 +539,17 @@ contract VaultonTest is Test {
      */
     function testBurnThresholdExact() public {
         // Calculate the exact amount needed to reach burn threshold
-        uint256 currentBurned = vaulton.burnedTokens();
+        uint256 currentBurned = vaulton.getBurnedTokens();
         uint256 burnThreshold = vaulton.BURN_THRESHOLD();
         uint256 amountToBurn = burnThreshold - currentBurned;
         
+        // ✅ CORRECTION : Transférer au contrat puis brûler
+        vm.prank(owner);
+        vaulton.transfer(address(vaulton), amountToBurn);
+        
         // Burn exactly to threshold
         vm.prank(owner);
-        vaulton.burn(owner, amountToBurn);
+        vaulton.burn(address(vaulton), amountToBurn);
         
         // Verify taxes removed when threshold exactly reached
         assertTrue(vaulton.taxesRemoved(), "Taxes not removed at exact threshold");
@@ -536,7 +557,7 @@ contract VaultonTest is Test {
         assertEq(vaulton.getBuyTax(), 0, "Buy tax not reset");
         
         // Verify the burnedTokens counter is updated correctly
-        assertEq(vaulton.burnedTokens(), burnThreshold, "Burned tokens not tracked correctly");
+        assertEq(vaulton.getBurnedTokens(), burnThreshold, "Burned tokens not tracked correctly");
     }
     
     // ========================================
@@ -599,6 +620,135 @@ contract VaultonTest is Test {
         vm.prank(unauthorized);
         vm.expectRevert("Ownable: caller is not the owner");
         vaulton.excludeFromFees(user, true);
+    }
+
+    /**
+     * @notice Tests anti-MEV protection during launch
+     * @dev Verifies bots cannot trade in first 3 blocks after enableTrading
+     * @dev Critical protection mechanism for fair launch
+     */
+    function testAntiMEVProtection() public {
+        vm.prank(owner);
+        vaulton.setSwapEnabled(false);
+        
+        // Deploy a mock contract to simulate bot
+        MockBot bot = new MockBot();
+        
+        // Give tokens to bot
+        vm.prank(owner);
+        vaulton.transfer(address(bot), 1000 * 10**18);
+        
+        // Enable trading
+        vm.prank(owner);
+        vaulton.enableTrading();
+        
+        // Bot should be blocked immediately after enabling
+        vm.expectRevert("No contracts during launch");
+        bot.attemptTransfer(payable(address(vaulton)), user, 100 * 10**18);
+        
+        // Move significantly past protection period
+        vm.roll(block.number + 10); // Much more than needed
+        
+        // Verify protection is inactive
+        (,, uint256 blocksLeft, bool isActive) = vaulton.getTradingStatus();
+        assertEq(blocksLeft, 0, "Protection should be over");
+        assertFalse(isActive, "Protection should be inactive");
+        
+        // Now bot should work
+        bot.attemptTransfer(payable(address(vaulton)), user, 100 * 10**18);
+    }
+
+    /**
+     * @notice Tests trading status getter function
+     * @dev Verifies getTradingStatus returns correct information
+     */
+    function testGetTradingStatus() public {
+        // Before enabling
+        (bool enabled, uint256 launchBlockNumber, uint256 blocksLeft, bool isActive) = vaulton.getTradingStatus();
+        assertFalse(enabled, "Trading should not be enabled");
+        assertEq(launchBlockNumber, 0, "Launch block should be 0");
+        assertEq(blocksLeft, 0, "Blocks left should be 0");
+        assertFalse(isActive, "Protection should not be active");
+        
+        // Enable trading
+        vm.prank(owner);
+        vaulton.enableTrading();
+        
+        // Get launch block immediately after enabling
+        (, uint256 launchBlock,,) = vaulton.getTradingStatus();
+        
+        // Check status immediately after (same block as launch)
+        (enabled, launchBlockNumber, blocksLeft, isActive) = vaulton.getTradingStatus();
+        assertTrue(enabled, "Trading should be enabled");
+        assertEq(launchBlockNumber, launchBlock, "Launch block incorrect");
+        assertEq(blocksLeft, 3, "Should have 3 blocks protection left");
+        assertTrue(isActive, "Protection should be active");
+        
+        // Move forward 1 block
+        vm.roll(launchBlock + 1);
+        (,, blocksLeft, isActive) = vaulton.getTradingStatus();
+        assertEq(blocksLeft, 2, "Should have 2 blocks protection left");
+        assertTrue(isActive, "Protection should still be active");
+        
+        // Move forward 2 more blocks (total 3 from launch)
+        vm.roll(launchBlock + 3);
+        (,, blocksLeft, isActive) = vaulton.getTradingStatus();
+        assertEq(blocksLeft, 0, "Should have 0 blocks protection left");
+        assertTrue(isActive, "Protection should still be active"); // ✅ CORRECTION : encore active au block launchBlock + 3
+        
+        // Move forward 1 more block (total 4 from launch)
+        vm.roll(launchBlock + 4);
+        (,, blocksLeft, isActive) = vaulton.getTradingStatus();
+        assertEq(blocksLeft, 0, "Protection should be over");
+        assertFalse(isActive, "Protection should be inactive"); // ✅ CORRECTION : maintenant inactive
+    }
+
+    /**
+     * @notice Tests anti-bot status checker
+     * @dev Verifies getAntiBotStatus returns correct information
+     */
+    function testGetAntiBotStatus() public {
+        MockBot bot = new MockBot();
+        
+        // Before trading enabled
+        (bool blocked, string memory reason) = vaulton.getAntiBotStatus(address(bot));
+        assertFalse(blocked, "Should not be blocked before trading");
+        assertEq(reason, "Protection not active", "Wrong reason");
+        
+        // Enable trading
+        vm.prank(owner);
+        vaulton.enableTrading();
+        
+        // Contract should be blocked
+        (blocked, reason) = vaulton.getAntiBotStatus(address(bot));
+        assertTrue(blocked, "Contract should be blocked");
+        assertEq(reason, "Contract blocked during launch", "Wrong reason");
+        
+        // EOA should not be blocked
+        (blocked, reason) = vaulton.getAntiBotStatus(trader);
+        assertFalse(blocked, "EOA should not be blocked");
+        assertEq(reason, "Address allowed", "Wrong reason");
+        
+        // After protection period
+        vm.roll(block.number + 4);
+        (blocked, reason) = vaulton.getAntiBotStatus(address(bot));
+        assertFalse(blocked, "Should not be blocked after protection");
+        assertEq(reason, "Protection not active", "Wrong reason");
+    }
+
+    /**
+     * @notice Tests enableTrading can only be called once
+     * @dev Verifies trading cannot be re-enabled
+     */
+    function testEnableTradingOnlyOnce() public {
+        // First call should succeed
+        vm.prank(owner);
+        vaulton.enableTrading();
+        
+        // Second call should fail
+        vm.expectRevert("Trading already enabled");
+        vm.prank(owner);
+        vaulton.enableTrading();
     }
 
     // ========================================
@@ -918,7 +1068,7 @@ contract VaultonTest is Test {
     }
 
     /**
-     * @notice Tests token constant getter function
+     * @notice Tests token constant getter
      * @dev Verifies getTokenConstants returns accurate values
      */
     function testGetTokenConstants() public view {
@@ -1047,5 +1197,23 @@ contract VaultonTest is Test {
         // Explicitly set force revert to false before swaps
         vm.prank(owner);
         mockRouter.setForceRevert(false);
+    }
+}
+
+/**
+ * @dev Mock contract to simulate a trading bot
+ */
+contract MockBot {
+    function attemptTransfer(address payable token, address to, uint256 amount) external {
+        Vaulton(token).transfer(to, amount);
+    }
+}
+
+/**
+ * @dev Mock contract to simulate proxy calls
+ */
+contract MockProxy {
+    function proxyTransfer(address payable token, address to, uint256 amount) external {
+        Vaulton(token).transfer(to, amount);
     }
 }

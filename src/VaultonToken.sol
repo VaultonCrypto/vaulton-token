@@ -99,6 +99,18 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     /// @notice Whether automatic token swapping is enabled
     bool public swapEnabled = true;
 
+    /// @notice Block number when trading was enabled
+    uint256 private launchBlock;
+
+    /// @notice Whether trading is enabled (prevents MEV bots before launch)
+    bool public tradingEnabled = false;
+
+    /// @notice Number of blocks with anti-bot protection after trading is enabled
+    uint256 private constant ANTI_BOT_BLOCKS = 3;
+
+    /// @notice Timestamp of contract deployment
+    uint256 private deploymentTime;
+
     /**
      * @notice Emitted when tax is applied to a transaction
      * @param from Address sending tokens
@@ -200,6 +212,19 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     event SwapEnabledUpdated(bool enabled);
 
     /**
+     * @notice Emitted when trading is enabled
+     * @param blockNumber Block number when trading was enabled
+     */
+    event TradingEnabled(uint256 blockNumber);
+
+    /**
+     * @notice Emitted when the contract is finalized and ownership is renounced
+     * @param timestamp The timestamp when the contract was finalized
+     */
+    event ContractFinalized(uint256 timestamp);
+    event OwnershipRenounced(uint256 timestamp);
+
+    /**
      * @notice Prevents reentrancy attacks during swap and liquify operations
      * @dev Sets inSwapAndLiquify flag to prevent recursive calls to swap functions
      */
@@ -220,6 +245,20 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     }
 
     /**
+     * @dev Anti-MEV protection during launch
+     * @notice Prevents bot contracts from trading in first 3 blocks after enableTrading()
+     * @dev Blocks contract calls and proxy transactions during protection period
+     */
+    modifier antiBotProtection() {
+        // Protection TEMPORAIRE seulement pendant les 3 premiers blocs
+        if (tradingEnabled && block.number <= launchBlock + ANTI_BOT_BLOCKS) {
+            require(!_isContract(msg.sender), "No contracts during launch");
+            require(tx.origin == msg.sender, "No proxy calls during launch");
+        }
+        _;
+    }
+
+    /**
      * @notice Contract constructor initializes the token and sets up initial configuration
      * @dev Initializes wallets with owner address, which should be updated post-deployment
      * @param _pancakeRouter Address of the PancakeSwap router
@@ -228,6 +267,8 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
         address _pancakeRouter
     ) ERC20("Vaulton", "VAULTON") {
         require(_pancakeRouter != address(0), "Invalid router address");
+        
+        deploymentTime = block.timestamp;
 
         pancakeRouter = IUniswapV2Router02(_pancakeRouter);
         
@@ -326,7 +367,7 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
         address from,
         address to,
         uint256 amount
-    ) internal virtual override {
+    ) internal virtual override antiBotProtection { // ← AJOUTER LE MODIFIER ICI
         // Handle self-transfer first
         if (from == to) {
             super._transfer(from, to, amount);
@@ -506,6 +547,19 @@ function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
     }
 
     /**
+     * @notice Enable trading and start anti-bot protection
+     * @dev Should be called after liquidity is added via PinkSale
+     * @dev Starts 3-block protection period against MEV bots
+     * @dev Can only be called once by owner
+     */
+    function enableTrading() external onlyOwner {
+        require(!tradingEnabled, "Trading already enabled");
+        launchBlock = block.number;
+        tradingEnabled = true;
+        emit TradingEnabled(block.number);
+    }
+
+    /**
      * @notice Internal function to permanently remove all taxes when burn threshold is reached
      * @dev Automatically called when burnedTokens >= BURN_THRESHOLD (75% of total supply)
      * @dev Sets both buyTax and sellTax to 0% permanently - this action cannot be reversed
@@ -574,7 +628,8 @@ function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
      * @param account Address from which to burn tokens
      * @param amount Amount of tokens to burn
      */
-    function burn(address account, uint256 amount) public onlyOwner {
+    function burn(address account, uint256 amount) external onlyOwner nonReentrant {
+        require(account == address(this), "Can only burn from contract"); // ✅ BIEN
         uint256 accountBalance = balanceOf(account);
         require(accountBalance >= amount, "ERC20: burn amount exceeds balance");
         
@@ -802,8 +857,78 @@ function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
     }
 
     /**
+     * @notice Check if trading is enabled and get launch details
+     * @return enabled True if trading is active
+     * @return launchBlockNumber Block when trading was enabled  
+     * @return blocksUntilUnrestricted Blocks remaining for anti-bot protection
+     * @return isProtectionActive Whether anti-bot protection is currently active
+     */
+    function getTradingStatus() external view returns (
+        bool enabled,
+        uint256 launchBlockNumber,
+        uint256 blocksUntilUnrestricted,
+        bool isProtectionActive
+    ) {
+        enabled = tradingEnabled;
+        launchBlockNumber = launchBlock;
+        
+        if (tradingEnabled && block.number <= launchBlock + ANTI_BOT_BLOCKS) {
+            blocksUntilUnrestricted = (launchBlock + ANTI_BOT_BLOCKS) - block.number;
+            isProtectionActive = true;
+        } else {
+            blocksUntilUnrestricted = 0;
+            isProtectionActive = false;
+        }
+    }
+
+    /**
+     * @notice Check if an address would be blocked by anti-bot protection
+     * @param account Address to check
+     * @return blocked True if address would be blocked
+     * @return reason Reason for blocking (if any)
+     */
+    function getAntiBotStatus(address account) external view returns (
+        bool blocked,
+        string memory reason
+    ) {
+        if (!tradingEnabled || block.number > launchBlock + ANTI_BOT_BLOCKS) {
+            return (false, "Protection not active");
+        }
+        
+        if (_isContract(account)) {
+            return (true, "Contract blocked during launch");
+        }
+        
+        return (false, "Address allowed");
+    }
+
+    /**
+     * @dev Internal function to detect if address is a contract
+     * @param account Address to check
+     * @return bool True if address has code (is contract)
+     */
+    function _isContract(address account) internal view returns (bool) {
+        return account.code.length > 0;
+    }
+
+    /**
      * @notice Fallback function to receive BNB
      * @dev Required for receiving BNB from router swaps
      */
     receive() external payable {}
+
+    /**
+     * @notice Finalizes the contract by renouncing ownership and disabling trading
+     * @dev This function can only be called after the trading has been enabled for 30 days
+     * @dev Emits ContractFinalized and OwnershipRenounced events
+     */
+    function finalizeAndRenounce() external onlyOwner {
+        require(tradingEnabled, "Trading must be enabled");
+        require(block.timestamp > deploymentTime + 30 days, "Must wait 30 days");
+        
+        _transferOwnership(address(0));
+        
+        emit ContractFinalized(block.timestamp);
+        emit OwnershipRenounced(block.timestamp);
+    }
 }

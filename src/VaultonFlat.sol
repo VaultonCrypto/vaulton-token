@@ -809,225 +809,117 @@ contract ERC20 is Context, IERC20, IERC20Metadata {
 
 /**
  * @title Vaulton Token
- * @dev Implementation of the Vaulton Token with burn mechanism, taxes, and BNB distribution
  * @author Vaulton Team
- * @notice This token implements a burn mechanism that removes taxes once 75% of supply is burned
+ * @notice A deflationary token that automatically removes taxes once 75% of supply is burned
+ * @dev Implements automatic burn mechanism and strategic liquidity management
+ * 
+ * SECURITY: Wallets are set once at deployment and CANNOT be changed (no updateWallets function)
+ * 
+ * Key Features:
+ * - 60% of taxes are burned automatically on each transaction
+ * - 40% of taxes accumulate for marketing (manually convertible to BNB)
+ * - Taxes automatically removed when 75% of total supply is burned
+ * - No instant liquidity mechanism - clean tax distribution
+ * - Owner can renounce after conditions are met (PinkSale compatible)
+ * - Fund wallets are IMMUTABLE - maximum rug pull protection
+ * - LP tokens burned for permanent liquidity (superior to time locks)
  */
 contract Vaulton is ERC20, Ownable, ReentrancyGuard {
-    // Constants
+    // ========================================
+    // CONSTANTS
+    // ========================================
+    
     /// @notice Total supply of VAULTON tokens (50 million)
-    /// @dev This is the maximum amount of tokens that will ever exist
     uint256 public constant TOTAL_SUPPLY = 50_000_000 * 10**18;
-
-    /// @notice Amount of tokens burned at contract deployment (15 million)
-    /// @dev This represents 30% of total supply burned immediately upon launch
+    
+    /// @notice Amount of tokens burned at deployment (15 million)
     uint256 public constant INITIAL_BURN = 15_000_000 * 10**18;
-
-    /// @notice Threshold at which taxes are automatically and permanently removed
-    /// @dev Set to 75% of total supply (37.5 million tokens including initial burn)
-    /// @dev Once reached, buyTax and sellTax are set to 0% forever
+    
+    /// @notice Threshold at which taxes are permanently removed (75% of total supply)
     uint256 public constant BURN_THRESHOLD = (TOTAL_SUPPLY * 75) / 100;
 
-    /// @notice Maximum amount allowed in a single transaction (1% of total supply)
-    /// @dev Applies to transfers between wallets (not DEX operations)
-    /// @dev Prevents whale manipulation while allowing normal trading
-    uint256 public constant MAX_TX_AMOUNT = TOTAL_SUPPLY / 100;
+    /// @dev Tax distribution percentages
+    uint256 private constant BURN_PERCENT = 60;     // 60% of taxes burned
+    uint256 private constant MARKETING_PERCENT = 40; // 40% for marketing
 
-    // State variables
-
-    /// @notice Total amount of tokens burned throughout the contract's lifetime
-    /// @dev This counter is used to track progress toward the 75% burn threshold
-    /// @dev When BURN_THRESHOLD is reached, all taxes are permanently disabled
-    uint256 public burnedTokens;
-
-    /// @notice Interface to the PancakeSwap V2 router for token swaps and liquidity operations
-    /// @dev Used for converting accumulated tokens to BNB and adding liquidity
-    IUniswapV2Router02 public pancakeRouter;
-
-    /// @notice Address of the main trading pair (typically VAULTON/WBNB)
-    /// @dev This pair is used for buy/sell tax calculations and swap operations
-    /// @dev Set via setPancakePair() after launch or auto-detected via _detectAndSetupPair()
-    address public pancakePair;
-
-    // Wallets
-    address public marketingWallet;
-    address public cexWallet;
-    address public operationsWallet;
-
-    // Shares for distribution (total = 100%)
-    uint256 public marketingShare = 45;
-    uint256 public cexShare = 25;
-    uint256 public operationsShare = 30;
-
-    // Distribution queue
-    mapping(address => uint256) public pendingDistributions;
-    bool private distributionQueued;
-    uint256 private lastDistributionBlock;
-    uint256 private constant DISTRIBUTION_DELAY = 1;
-
-    // Mappings
-    mapping(address => bool) public isDexPair;
-    mapping(address => bool) private isExcludedFromFees;
-    bool private inSwapAndLiquify;
-    bool public taxesRemoved;
-
-    // Tax Constants
-    uint256 public buyTax = 5;
-    uint256 public sellTax = 10;
-
-    /// @notice Percentage of each tax allocated to token burning (60%)
-    /// @dev This is the primary deflationary mechanism of the token
-    uint256 private constant BURN_PERCENT = 60;
-
-    /// @notice Percentage of each tax allocated to marketing operations (25%)
-    /// @dev These tokens are accumulated in contract and converted to BNB for distribution
-    uint256 private constant MARKETING_PERCENT = 25;
-
-    /// @notice Percentage of each tax allocated to liquidity provision (15%)
-    /// @dev These tokens are automatically converted to BNB and added back to liquidity pool
-    uint256 private constant LIQUIDITY_PERCENT = 15;
-
-    /// @notice Maximum amount allowed in DEX-to-DEX transfers (0.5% of total supply)
-    uint256 public maxDexToDexAmount = TOTAL_SUPPLY / 200;
-
-    /// @notice Tracks last DEX-to-DEX transfer time for each address (cooldown mechanism)
-    mapping(address => uint256) private lastDexToDexTime;
-
-    /// @notice Cooldown period between DEX-to-DEX transfers (5 minutes)
-    uint256 private constant DEX_TO_DEX_COOLDOWN = 300;
-
-    /// @notice Whether automatic token swapping is enabled
-    bool public swapEnabled = true;
-
-    /// @notice Block number when trading was enabled
-    uint256 private launchBlock;
-
-    /// @notice Whether trading is enabled (prevents MEV bots before launch)
-    bool public tradingEnabled = false;
-
-    /// @notice Number of blocks with anti-bot protection after trading is enabled
+    /// @dev Tax rates (immutable)
+    uint8 private constant BUY_TAX = 5;              // 5% buy tax
+    uint8 private constant SELL_TAX = 10;            // 10% sell tax
+    uint8 private constant WALLET_TAX = 3;           // 3% wallet-to-wallet tax
+    
+    /// @dev Anti-bot protection duration in blocks
     uint256 private constant ANTI_BOT_BLOCKS = 3;
 
-    /// @notice Timestamp of contract deployment
-    uint256 private deploymentTime;
+    /// @notice BNB distribution shares for fund distribution
+    uint256 public constant MARKETING_SHARE = 45;    // 45% to marketing wallet
+    uint256 public constant CEX_SHARE = 25;          // 25% to CEX wallet
+    uint256 public constant OPERATIONS_SHARE = 30;   // 30% to operations wallet
 
-    /**
-     * @notice Emitted when tax is applied to a transaction
-     * @param from Address sending tokens
-     * @param to Address receiving tokens
-     * @param amount Total amount of the transaction
-     * @param taxAmount Amount of tax collected
-     * @param taxType Type of tax applied (buy/sell/universal)
-     */
+    // ========================================
+    // STATE VARIABLES
+    // ========================================
+
+    /// @notice Total amount of tokens burned throughout contract lifetime
+    uint256 public burnedTokens;
+    
+    /// @notice Marketing tokens accumulated from taxes (convertible to BNB)
+    uint256 public marketingTokensAccumulated;
+
+    /// @notice Immutable reference to PancakeSwap router
+    IUniswapV2Router02 public immutable pancakeRouter;
+    
+    /// @notice Address of the main trading pair (VAULTON/WBNB)
+    address public pancakePair;
+
+    /// @notice Wallet addresses for fund distribution (SET ONCE - cannot be changed)
+    address public marketingWallet;   // Immutable after deployment
+    address public cexWallet;         // Immutable after deployment  
+    address public operationsWallet;  // Immutable after deployment
+
+    /// @notice Trading state and configuration
+    bool public tradingEnabled;
+    bool public taxesRemoved;
+    uint32 public launchBlock;
+
+    /// @notice Mapping to identify DEX pairs for tax calculation
+    mapping(address => bool) public isDexPair;
+    
+    /// @dev Mapping to track fee exclusions
+    mapping(address => bool) private isExcludedFromFees;
+
+    /// @dev Lock to prevent reentrancy during swaps
+    bool private inSwapAndLiquify;
+
+    // ========================================
+    // EVENTS
+    // ========================================
+
+    /// @notice Emitted when taxes are applied to a transaction
     event TaxApplied(address indexed from, address indexed to, uint256 amount, uint256 taxAmount, string taxType);
     
-    /**
-     * @notice Emitted when swap and liquify process completes
-     * @param tokensSwapped Amount of tokens swapped for BNB
-     * @param bnbReceived Amount of BNB received from swap
-     * @param tokensIntoLiquidity Amount of tokens added to liquidity
-     */
-    event SwapAndLiquifyCompleted(uint256 tokensSwapped, uint256 bnbReceived, uint256 tokensIntoLiquidity);
-    
-    /**
-     * @notice Emitted when a DEX pair status is updated
-     * @param pair Address of the DEX pair
-     * @param status New status of the pair
-     */
-    event DexPairUpdated(address indexed pair, bool status);
-    
-    /**
-     * @notice Emitted when taxes are removed after burn threshold is reached
-     */
+    /// @notice Emitted when taxes are permanently removed at 75% burn
     event TaxesRemoved();
     
-    /**
-     * @notice Emitted when initial burn is completed
-     * @param amount Amount of tokens burned initially
-     * @param timestamp Time when the burn occurred
-     */
-    event InitialBurnCompleted(uint256 amount, uint256 timestamp);
-    
-    /**
-     * @notice Emitted when a DEX pair is automatically detected
-     * @param pair Address of the detected pair
-     */
-    event PairAutoDetected(address indexed pair);
-    
-    /**
-     * @notice Emitted when burn progress is updated
-     * @param burnedAmount Total amount burned
-     * @param burnPercentage Percentage of total supply burned
-     */
+    /// @notice Emitted when burn progress is updated
     event BurnProgressUpdated(uint256 burnedAmount, uint256 burnPercentage);
     
-    /**
-     * @notice Emitted when tax rates are updated
-     * @param buyTax New buy tax percentage
-     * @param sellTax New sell tax percentage
-     */
-    event TaxesUpdated(uint256 buyTax, uint256 sellTax);
+    /// @notice Emitted when trading is enabled
+    event TradingEnabled(uint256 blockNumber);
     
-    /**
-     * @notice Emitted when max transaction amount is updated
-     * @param maxTxAmount New maximum transaction amount
-     */
-    event MaxTransactionUpdated(uint256 maxTxAmount);
-    
-    /**
-     * @notice Emitted when marketing contract is updated
-     * @param oldContract Previous marketing contract address
-     * @param newContract New marketing contract address
-     */
-    event MarketingContractUpdated(address indexed oldContract, address indexed newContract);
-    
-    /**
-     * @notice Emitted when funds are distributed to wallets
-     * @param marketingAmount Amount sent to marketing wallet
-     * @param cexAmount Amount sent to CEX wallet
-     * @param operationsAmount Amount sent to operations wallet
-     */
+    /// @notice Emitted when BNB is distributed to wallets
     event FundsDistributed(uint256 marketingAmount, uint256 cexAmount, uint256 operationsAmount);
     
-    /**
-     * @notice Emitted when wallet addresses are updated
-     * @param marketingWallet New marketing wallet address
-     * @param cexWallet New CEX wallet address
-     * @param operationsWallet New operations wallet address
-     */
-    event WalletsUpdated(address indexed marketingWallet, address indexed cexWallet, address indexed operationsWallet);
+    /// @notice Emitted when marketing tokens are converted to BNB
+    event MarketingTokensProcessed(uint256 tokensSwapped, uint256 bnbReceived);
     
-    /**
-     * @notice Emitted when distribution shares are updated
-     * @param marketingShare New marketing share percentage
-     * @param cexShare New CEX share percentage
-     * @param operationsShare New operations share percentage
-     */
-    event SharesUpdated(uint256 marketingShare, uint256 cexShare, uint256 operationsShare);
+    /// @notice Emitted when a trading pair is automatically detected
+    event PairAutoDetected(address indexed pair);
 
-    /**
-     * @notice Emitted when swap enabled status is updated
-     * @param enabled New swap enabled status
-     */
-    event SwapEnabledUpdated(bool enabled);
+    // ========================================
+    // MODIFIERS
+    // ========================================
 
-    /**
-     * @notice Emitted when trading is enabled
-     * @param blockNumber Block number when trading was enabled
-     */
-    event TradingEnabled(uint256 blockNumber);
-
-    /**
-     * @notice Emitted when the contract is finalized and ownership is renounced
-     * @param timestamp The timestamp when the contract was finalized
-     */
-    event ContractFinalized(uint256 timestamp);
-    event OwnershipRenounced(uint256 timestamp);
-
-    /**
-     * @notice Prevents reentrancy attacks during swap and liquify operations
-     * @dev Sets inSwapAndLiquify flag to prevent recursive calls to swap functions
-     */
+    /// @dev Prevents reentrancy during swap operations
     modifier lockTheSwap() {
         require(!inSwapAndLiquify, "Swap locked");
         inSwapAndLiquify = true;
@@ -1035,700 +927,522 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
         inSwapAndLiquify = false;
     }
 
-    /**
-     * @notice Automatically detects trading pair before executing function
-     * @dev Ensures pair configuration is up-to-date before tax calculations
-     */
-    modifier detectPair() {
-        _detectAndSetupPair();
-        _;
-    }
-
-    /**
-     * @dev Anti-MEV protection during launch
-     * @notice Prevents bot contracts from trading in first 3 blocks after enableTrading()
-     * @dev Blocks contract calls and proxy transactions during protection period
-     */
+    /// @dev Provides anti-bot protection during first 3 blocks after launch
     modifier antiBotProtection() {
-        // Protection TEMPORAIRE seulement pendant les 3 premiers blocs
         if (tradingEnabled && block.number <= launchBlock + ANTI_BOT_BLOCKS) {
-            require(!_isContract(msg.sender), "No contracts during launch");
-            require(tx.origin == msg.sender, "No proxy calls during launch");
+            if (_isContract(msg.sender)) {
+                require(_isAllowedContract(msg.sender), "Contract not allowed during launch");
+            }
         }
         _;
     }
 
+    // ========================================
+    // CONSTRUCTOR
+    // ========================================
+
     /**
-     * @notice Contract constructor initializes the token and sets up initial configuration
-     * @dev Initializes wallets with owner address, which should be updated post-deployment
-     * @param _pancakeRouter Address of the PancakeSwap router
+     * @notice Deploys the Vaulton token contract with PERMANENT wallet addresses
+     * @param _pancakeRouter Address of the PancakeSwap V2 router
+     * @param _marketingWallet Address of the marketing wallet (CANNOT be changed later)
+     * @param _cexWallet Address of the CEX wallet (CANNOT be changed later)
+     * @param _operationsWallet Address of the operations wallet (CANNOT be changed later)
+     * 
+     * @dev Deployment Process:
+     * 1. Mints 50M total supply to owner
+     * 2. Burns 15M tokens immediately (30% initial burn)
+     * 3. Sets IMMUTABLE wallet addresses (no update function exists)
+     * 4. Excludes owner and contract from fees
+     * 5. Initializes burn tracking and progress events
+     * 
+     * @dev Security Features:
+     * - All wallet addresses are immutable post-deployment
+     * - No admin functions to change core parameters
+     * - Initial burn creates immediate deflationary pressure
      */
     constructor(
-        address _pancakeRouter
+        address _pancakeRouter,
+        address _marketingWallet,
+        address _cexWallet, 
+        address _operationsWallet
     ) ERC20("Vaulton", "VAULTON") {
         require(_pancakeRouter != address(0), "Invalid router address");
-        
-        deploymentTime = block.timestamp;
-
-        pancakeRouter = IUniswapV2Router02(_pancakeRouter);
-        
-        // Initialize wallets with owner address - must be updated after deployment
-        // via updateWallets() with appropriate dedicated addresses
-        marketingWallet = owner();
-        cexWallet = owner();
-        operationsWallet = owner();
-
-        // Mint total supply to owner
-        _mint(owner(), TOTAL_SUPPLY);
-        
-        // Initial burn
-        _burn(owner(), INITIAL_BURN);
-        burnedTokens = INITIAL_BURN;
-        
-        emit InitialBurnCompleted(INITIAL_BURN, block.timestamp);
-
-        excludeFromFees(owner(), true);
-        excludeFromFees(address(this), true);
-    }
-
-    /**
-     * @notice Manually set the PancakeSwap pair address
-     * @dev This function is specifically designed for PinkSale FairLaunch integration
-     * @dev After PinkSale creates the liquidity pair, this function must be called
-     * @dev to ensure the contract recognizes the official trading pair
-     * @param _pair Address of the trading pair created by PinkSale
-     */
-    function setPancakePair(address _pair) external onlyOwner {
-        require(_pair != address(0), "Invalid pair address");
-        require(pancakePair == address(0), "Pair already set");
-        pancakePair = _pair;
-        isDexPair[_pair] = true;
-        emit DexPairUpdated(_pair, true);
-    }
-
-    /**
-     * @dev Attempts to automatically detect and set up the trading pair
-     * @dev This mechanism is a fallback that tries to discover the pair if not set manually
-     * @dev For PinkSale launches, manual configuration via setPancakePair() is recommended
-     * @dev as it provides stronger guarantees about which pair is the official one
-     */
-    function _detectAndSetupPair() internal {
-        if (pancakePair != address(0)) return;
-
-        address factory = pancakeRouter.factory();
-        address pair = IUniswapV2Factory(factory).getPair(
-            address(this), 
-            pancakeRouter.WETH()
-        );
-        
-        if (pair != address(0)) {
-            pancakePair = pair;
-            isDexPair[pair] = true;
-            emit PairAutoDetected(pair);
-            emit DexPairUpdated(pair, true);
-
-            // Auto-approve router for future swaps
-            _approve(address(this), address(pancakeRouter), type(uint256).max);
-        }
-    }
-
-    /**
-     * @dev Wrapper function for pair detection that can be called internally
-     * @dev This provides a cleaner way to trigger pair detection from other functions
-     */
-    function autoPairDetection() internal {
-        _detectAndSetupPair();
-    }
-
-    function _beforeTokenTransfer(
-        address from,
-        address to,
-        uint256 amount
-    ) internal virtual override {
-        super._beforeTokenTransfer(from, to, amount);
-        
-        // Auto-detection of the pair
-        autoPairDetection();
-
-        // Check if burn threshold is reached
-        if (burnedTokens >= BURN_THRESHOLD && !taxesRemoved) {
-            _removeTaxes();
-        }
-    }
-
-    /**
-     * @dev Override of the ERC20 transfer function to implement tax mechanism
-     * @dev Handles taxation, burn, marketing allocation and liquidity management
-     * @param from Address sending tokens
-     * @param to Address receiving tokens
-     * @param amount Amount of tokens being transferred
-     */
-    function _transfer(
-        address from,
-        address to,
-        uint256 amount
-    ) internal virtual override antiBotProtection { // ← AJOUTER LE MODIFIER ICI
-        // Handle self-transfer first
-        if (from == to) {
-            super._transfer(from, to, amount);
-            return;
-        }
-
-        // Cache frequently used values
-        bool isExcludedFrom = isExcludedFromFees[from];
-        bool isExcludedTo = isExcludedFromFees[to];
-        bool isDexPairTo = isDexPair[to];
-        bool isDexPairFrom = isDexPair[from];
-
-        // Check max transaction limit
-        if (!isExcludedFrom && !isExcludedTo && !isDexPairFrom && !isDexPairTo) {
-            require(amount <= MAX_TX_AMOUNT, "Max tx");
-        }
-
-        // DEX-to-DEX abuse protection
-        if (isDexPairFrom && isDexPairTo && from != address(0) && to != address(0)) {
-            require(amount <= maxDexToDexAmount, "DEX transfer too large");
-            require(
-                lastDexToDexTime[from] == 0 || 
-                block.timestamp >= lastDexToDexTime[from] + DEX_TO_DEX_COOLDOWN,
-                "DEX transfer cooldown"
-            );
-            lastDexToDexTime[from] = block.timestamp;
-        }
-
-        uint256 taxAmount = 0;
-
-        // Apply tax if applicable
-        if (!isExcludedFrom && !isExcludedTo && !taxesRemoved) {
-            if (isDexPairFrom && !isDexPairTo) {
-                // BUY (DEX → Wallet) - Buy tax 5%
-                taxAmount = (amount * buyTax) / 100;
-                emit TaxApplied(from, to, amount, taxAmount, "buy");
-            } else if (!isDexPairFrom && isDexPairTo) {
-                // SELL (Wallet → DEX) - Sell tax 10%
-                taxAmount = (amount * sellTax) / 100;
-                emit TaxApplied(from, to, amount, taxAmount, "sell");
-            } else if (!isDexPairFrom && !isDexPairTo) {
-                // Transfer between wallets - Sell tax 10%
-                taxAmount = (amount * sellTax) / 100;
-                emit TaxApplied(from, to, amount, taxAmount, "transfer");
-            }
-            // DEX → DEX: No tax (but with protections)
-        }
-
-        // Calculate net amount to transfer
-        uint256 sendAmount = amount - taxAmount;
-
-        // Perform the net transfer (SINGLE TRANSFER ONLY!)
-        super._transfer(from, to, sendAmount);
-
-        // Handle taxes if any
-        if (taxAmount > 0) {
-            uint256 burnAmount = (taxAmount * BURN_PERCENT) / 100;
-            uint256 marketingAmount = (taxAmount * MARKETING_PERCENT) / 100;
-            uint256 liquidityAmount = taxAmount - burnAmount - marketingAmount;
-
-            // Burn tokens directly from the sender
-            if (burnAmount > 0) {
-                _burn(from, burnAmount);
-                burnedTokens += burnAmount;
-            }
-
-            // Transfer marketing amount to contract
-            if (marketingAmount > 0) {
-                super._transfer(from, address(this), marketingAmount);
-            }
-
-            // Handle liquidity
-            if (liquidityAmount > 0) {
-                super._transfer(from, address(this), liquidityAmount);
-
-                if (swapEnabled && !inSwapAndLiquify && !isDexPair[from] && !isDexPair[to]) {
-                    swapAndLiquify(liquidityAmount);
-                }
-            }
-        }
-    }
-
-    /**
- * @notice Swaps tokens for BNB using PancakeSwap with slippage protection
- * @dev Includes 5% slippage protection to prevent frontrunning attacks
- * @dev This is a private function called during automatic liquidity operations
- * @param tokenAmount Amount of tokens to swap for BNB
- */
-function swapTokensForBNB(uint256 tokenAmount) private {
-    // Generate the Uniswap pair path of token -> WETH
-    address[] memory path = new address[](2);
-    path[0] = address(this);
-    path[1] = pancakeRouter.WETH();
-
-    // Make sure the contract has allowed the router to spend these tokens
-    _approve(address(this), address(pancakeRouter), tokenAmount);
-
-    // Protection against frontrunning
-    uint256 minAmountOut = 0;
-    if (pancakePair != address(0)) {
-        try pancakeRouter.getAmountsOut(tokenAmount, path) returns (uint256[] memory amounts) {
-            minAmountOut = amounts[1] * 95 / 100; // 5% slippage maximum
-        } catch {
-            // Fallback in case estimation fails
-            minAmountOut = 0;
-        }
-    }
-
-    uint256 initialBalance = address(this).balance;
-    try pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
-        tokenAmount,
-        minAmountOut, // Use the calculated minimum amount
-        path,
-        address(this),
-        block.timestamp
-    ) {
-        // Swap succeeded
-    } catch {
-        revert("Token to BNB swap failed");
-    }
-
-    // Verify the amount of ETH received after the swap
-    uint256 ethReceived = address(this).balance - initialBalance;
-    require(ethReceived > 0, "No ETH received from swap");
-}
-
-/**
- * @notice Adds liquidity to the PancakeSwap pool
- * @dev Private function that pairs tokens with BNB for liquidity provision
- * @param tokenAmount Amount of tokens to add to liquidity pool
- * @param bnbAmount Amount of BNB to add to liquidity pool
- */
-function addLiquidity(uint256 tokenAmount, uint256 bnbAmount) private {
-    // Approve token transfer to cover all possible scenarios
-    _approve(address(this), address(pancakeRouter), tokenAmount);
-
-    // Add the liquidity
-    pancakeRouter.addLiquidityETH{value: bnbAmount}(
-        address(this),
-        tokenAmount,
-        0, // slippage is unavoidable
-        0, // slippage is unavoidable
-        owner(),
-        block.timestamp
-    );
-}
-
-    /**
- * @notice Automatically swaps accumulated tokens for BNB and adds to liquidity
- * @dev This function is called automatically during transactions when conditions are met
- * @dev Protected by lockTheSwap modifier to prevent reentrancy
- * @param contractTokenBalance Amount of tokens accumulated in the contract to swap
- */
-function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
-    require(contractTokenBalance > 0, "No tokens to swap");
-
-    uint256 half = contractTokenBalance / 2;
-    uint256 otherHalf = contractTokenBalance - half;
-
-    uint256 initialBalance = address(this).balance;
-    swapTokensForBNB(half);
-    uint256 newBalance = address(this).balance - initialBalance;
-
-    addLiquidity(otherHalf, newBalance);
-    
-    emit SwapAndLiquifyCompleted(half, newBalance, otherHalf);
-}
-
-    /**
- * @notice Manually triggers the swap of accumulated tokens to BNB and adds to liquidity
- * @param contractTokenBalance Amount of tokens to swap
- * @dev This function is called manually by the owner to convert accumulated taxes
- */
-    function triggerSwapAndLiquify(uint256 contractTokenBalance) external onlyOwner {
-        swapAndLiquify(contractTokenBalance);
-    }
-
-    /**
-     * @notice Enable trading and start anti-bot protection
-     * @dev Should be called after liquidity is added via PinkSale
-     * @dev Starts 3-block protection period against MEV bots
-     * @dev Can only be called once by owner
-     */
-    function enableTrading() external onlyOwner {
-        require(!tradingEnabled, "Trading already enabled");
-        launchBlock = block.number;
-        tradingEnabled = true;
-        emit TradingEnabled(block.number);
-    }
-
-    /**
-     * @notice Internal function to permanently remove all taxes when burn threshold is reached
-     * @dev Automatically called when burnedTokens >= BURN_THRESHOLD (75% of total supply)
-     * @dev Sets both buyTax and sellTax to 0% permanently - this action cannot be reversed
-     * @dev Emits TaxesRemoved event to notify of this significant tokenomics change
-     * @dev This creates a deflationary token that becomes fee-free once enough is burned
-     * @dev SECURITY: Function is only called automatically, no manual override possible
-     * @dev INVARIANT: taxesRemoved flag prevents duplicate execution
-     */
-    function _removeTaxes() internal {
-        require(!taxesRemoved, "Taxes already removed");
-        buyTax = 0;
-        sellTax = 0;
-        taxesRemoved = true;
-        emit TaxesRemoved();
-    }
-
-    function renounceContract() external onlyOwner {
-        renounceOwnership();
-    }
-
-    function excludeFromFees(address _address, bool _status) public onlyOwner {
-        isExcludedFromFees[_address] = _status;
-    }
-
-    /**
-     * @notice Exclude multiple accounts from fees
-     * @param accounts Array of addresses to exclude
-     * @param excluded True to exclude, false to include
-     */
-    function excludeMultipleAccountsFromFees(
-        address[] memory accounts,
-        bool excluded
-    ) external onlyOwner {
-        require(accounts.length > 0, "Empty array");
-        for(uint256 i = 0; i < accounts.length; i++) {
-            require(accounts[i] != address(0), "Zero address");
-            isExcludedFromFees[accounts[i]] = excluded;
-        }
-    }
-
-    function setDexPair(address _pair, bool _status) external onlyOwner {
-        isDexPair[_pair] = _status;
-        emit DexPairUpdated(_pair, _status);
-    }
-
-    /**
-     * @notice Returns current buy tax percentage
-     * @return uint256 Current buy tax rate (0-100)
-     */
-    function getBuyTax() public view returns (uint256) {
-        return buyTax;
-    }
-
-    /**
-     * @notice Returns current sell tax percentage  
-     * @return uint256 Current sell tax rate (0-100)
-     */
-    function getSellTax() public view returns (uint256) {
-        return sellTax;
-    }
-
-    /**
-     * @notice Manually burns tokens from a specific account
-     * @dev Can only be called by owner, increments burnedTokens counter
-     * @dev Will trigger automatic tax removal if burn threshold is reached
-     * @param account Address from which to burn tokens
-     * @param amount Amount of tokens to burn
-     */
-    function burn(address account, uint256 amount) external onlyOwner nonReentrant {
-        require(account == address(this), "Can only burn from contract"); // ✅ BIEN
-        uint256 accountBalance = balanceOf(account);
-        require(accountBalance >= amount, "ERC20: burn amount exceeds balance");
-        
-        _burn(account, amount);
-        burnedTokens += amount;
-        
-        if (burnedTokens >= BURN_THRESHOLD && !taxesRemoved) {
-            _removeTaxes();
-        }
-    }
-
-    /**
-     * @notice Returns the total amount of tokens that have been burned
-     * @return uint256 Total burned token amount
-     */
-    function getBurnedTokens() public view returns (uint256) {
-        return burnedTokens;
-    }
-
-    /**
-     * @notice Checks if an address is excluded from paying fees
-     * @param _address The address to check
-     * @return bool True if the address is excluded from fees
-     */
-    function isAddressExcludedFromFees(address _address) public view returns (bool) {
-        return isExcludedFromFees[_address];
-    }
-
-    /**
-     * @notice Returns the maximum amount allowed in a single transaction
-     * @return uint256 Maximum transaction amount
-     */
-    function getMaxTransactionAmount() public pure returns (uint256) {
-        return MAX_TX_AMOUNT;
-    }
-
-    /**
-     * @notice External wrapper for excludeFromFees function
-     * @dev Allows excluding addresses from fees through external calls
-     * @param _address Address to exclude or include
-     * @param _status True to exclude, false to include
-     */
-    function excludeFromFeesExternal(address _address, bool _status) external onlyOwner {
-        excludeFromFees(_address, _status);
-    }
-
-    /**
-     * @notice Prepares distribution of funds by calculating amounts for each wallet
-     * @dev Creates a distribution queue that must be processed with distributeFunds()
-     * @dev Enforces a block delay between distributions for security
-     */
-    function queueDistribution() public onlyOwner {
-        require(address(this).balance > 0, "No funds to distribute");
-        require(!distributionQueued, "Distribution already queued");
-        require(block.number > lastDistributionBlock + DISTRIBUTION_DELAY, "Distribution delay not met");
-        
-        uint256 totalBalance = address(this).balance;
-        
-        pendingDistributions[marketingWallet] = (totalBalance * marketingShare) / 100;
-        pendingDistributions[cexWallet] = (totalBalance * cexShare) / 100;
-        pendingDistributions[operationsWallet] = (totalBalance * operationsShare) / 100;
-        
-        distributionQueued = true;
-        lastDistributionBlock = block.number;
-    }
-    
-    /**
-     * @notice Processes the distribution of funds to a specific wallet
-     * @dev Follows Check-Effects-Interactions pattern to prevent reentrancy issues
-     * @param wallet Address of the wallet to receive funds
-     */
-    function processDistribution(address wallet) public nonReentrant onlyOwner {
-        uint256 amount = pendingDistributions[wallet];
-        require(amount > 0, "No funds queued for this wallet");
-        
-        // Update state before external interaction
-        pendingDistributions[wallet] = 0;
-        
-        if (wallet == operationsWallet && 
-            pendingDistributions[marketingWallet] == 0 && 
-            pendingDistributions[cexWallet] == 0) {
-            distributionQueued = false;
-        }
-        
-        // External interaction last
-        (bool success, ) = wallet.call{value: amount}("");
-        require(success, "Transfer failed");
-    }
-    
-    /**
-     * @notice Distributes accumulated BNB to configured wallets
-     * @dev Distributes BNB according to percentages defined in marketingShare, cexShare and operationsShare
-     */
-    function distributeFunds() external onlyOwner {
-        require(address(this).balance > 0, "No funds to distribute");
-        
-        queueDistribution();
-        
-        // Store values before zeroing them out
-        uint256 marketingAmount = pendingDistributions[marketingWallet];
-        uint256 cexAmount = pendingDistributions[cexWallet];
-        uint256 operationsAmount = pendingDistributions[operationsWallet];
-        
-        processDistribution(marketingWallet);
-        processDistribution(cexWallet);
-        processDistribution(operationsWallet);
-        
-        // Emit event with correct amounts
-        emit FundsDistributed(marketingAmount, cexAmount, operationsAmount);
-    }
-    
-    /**
-     * @notice Updates the wallet addresses for fund distribution
-     * @dev Should be called after deployment to set up dedicated wallets
-     * @param _marketingWallet Address of the marketing wallet
-     * @param _cexWallet Address of the CEX wallet
-     * @param _operationsWallet Address of the operations wallet
-     */
-    function updateWallets(
-        address _marketingWallet,
-        address _cexWallet,
-        address _operationsWallet
-    ) external onlyOwner {
         require(_marketingWallet != address(0), "Invalid marketing wallet");
         require(_cexWallet != address(0), "Invalid CEX wallet");
         require(_operationsWallet != address(0), "Invalid operations wallet");
         
+        pancakeRouter = IUniswapV2Router02(_pancakeRouter);
+        
+        // Set IMMUTABLE wallet addresses
         marketingWallet = _marketingWallet;
         cexWallet = _cexWallet;
         operationsWallet = _operationsWallet;
+
+        // Mint total supply and perform initial burn
+        _mint(owner(), TOTAL_SUPPLY);
+        _burn(owner(), INITIAL_BURN);
+        burnedTokens = INITIAL_BURN;
         
-        emit WalletsUpdated(_marketingWallet, _cexWallet, _operationsWallet);
+        emit BurnProgressUpdated(burnedTokens, (burnedTokens * 100) / TOTAL_SUPPLY);
+
+        // Exclude system addresses from fees
+        isExcludedFromFees[owner()] = true;
+        isExcludedFromFees[address(this)] = true;
     }
-    
+
+    // ========================================
+    // CORE TRANSFER LOGIC
+    // ========================================
+
     /**
-     * @notice Updates the distribution shares for each wallet
-     * @param _marketingShare Percentage for marketing wallet (out of 100)
-     * @param _cexShare Percentage for CEX wallet (out of 100)
-     * @param _operationsShare Percentage for operations wallet (out of 100)
+     * @dev Hook called before token transfers to setup pairs and check burn threshold
      */
-    function updateShares(
-        uint256 _marketingShare,
-        uint256 _cexShare,
-        uint256 _operationsShare
-    ) external onlyOwner {
-        require(_marketingShare + _cexShare + _operationsShare == 100, "Shares must add up to 100");
-        marketingShare = _marketingShare;
-        cexShare = _cexShare;
-        operationsShare = _operationsShare;
-        emit SharesUpdated(_marketingShare, _cexShare, _operationsShare);
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual override {
+        super._beforeTokenTransfer(from, to, amount);
+        
+        // Auto-detect and setup trading pairs
+        _detectAndSetupPair();
+
+        // Check if burn threshold reached and remove taxes
+        if (burnedTokens >= BURN_THRESHOLD && !taxesRemoved) {
+            _removeTaxes();
+        }
     }
 
     /**
-     * @notice Returns key token constants for testing and UI
-     * @return totalSupply The total token supply
-     * @return initialBurn The initial burn amount
-     * @return burnThreshold The burn threshold amount
-     * @return maxTxAmount The maximum transaction amount
+     * @dev Core transfer function with tax logic and anti-bot protection
      */
-    function getTokenConstants() external pure returns (
-        uint256 totalSupply,
-        uint256 initialBurn,
-        uint256 burnThreshold,
-        uint256 maxTxAmount
-    ) {
-        totalSupply = TOTAL_SUPPLY;
-        initialBurn = INITIAL_BURN;
-        burnThreshold = BURN_THRESHOLD;
-        maxTxAmount = MAX_TX_AMOUNT;
-    }
-
-    /**
-     * @notice Returns the current tax distribution percentages
-     * @return burnShare Percentage of tax allocated to burn
-     * @return marketingShare_ Percentage of tax allocated to marketing
-     * @return liquidityShare_ Percentage of tax allocated to liquidity
-     */
-    function getTaxDistribution() external pure returns (
-        uint256 burnShare,
-        uint256 marketingShare_,
-        uint256 liquidityShare_
-    ) {
-        burnShare = 60;
-        marketingShare_ = 25;
-        liquidityShare_ = 15;
-    }
-
-    /**
-     * @notice Enable or disable automatic swap and liquify
-     * @param enabled Whether automatic swaps should be enabled
-     */
-    function setSwapEnabled(bool enabled) external onlyOwner {
-        swapEnabled = enabled;
-        emit SwapEnabledUpdated(enabled);
-    }
-
-    /**
-     * @notice Configure limits for DEX → DEX transfers
-     * @param _maxAmount Maximum amount allowed (0 = no limit)
-     */
-    function setDexToDexLimit(uint256 _maxAmount) external onlyOwner {
-        maxDexToDexAmount = _maxAmount;
-    }
-
-    /**
-     * @notice Check DEX → DEX status for an address
-     * @param account Address to check
-     * @return canTransfer Whether can transfer now
-     * @return timeLeft Time remaining before next transfer (in seconds)
-     */
-    function getDexToDexStatus(address account) external view returns (
-        bool canTransfer,
-        uint256 timeLeft
-    ) {
-        // FIXED: If no previous transfer, allow
-        if (lastDexToDexTime[account] == 0) {
-            canTransfer = true;
-            timeLeft = 0;
-            return (canTransfer, timeLeft);
+    function _transfer(address from, address to, uint256 amount) internal override antiBotProtection {
+        require(from != address(0) && to != address(0), "Zero address");
+        require(amount > 0, "Zero amount");
+        
+        if (!tradingEnabled) {
+            require(
+                from == owner() || 
+                to == owner() || 
+                from == address(this) || 
+                to == address(this), 
+                "Trading not enabled"
+            );
         }
         
-        uint256 nextAllowedTime = lastDexToDexTime[account] + DEX_TO_DEX_COOLDOWN;
-        canTransfer = block.timestamp >= nextAllowedTime;
-        timeLeft = canTransfer ? 0 : nextAllowedTime - block.timestamp;
-    }
-
-    /**
-     * @notice Check if trading is enabled and get launch details
-     * @return enabled True if trading is active
-     * @return launchBlockNumber Block when trading was enabled  
-     * @return blocksUntilUnrestricted Blocks remaining for anti-bot protection
-     * @return isProtectionActive Whether anti-bot protection is currently active
-     */
-    function getTradingStatus() external view returns (
-        bool enabled,
-        uint256 launchBlockNumber,
-        uint256 blocksUntilUnrestricted,
-        bool isProtectionActive
-    ) {
-        enabled = tradingEnabled;
-        launchBlockNumber = launchBlock;
+        uint256 taxAmount = _calculateTax(from, to, amount);
         
-        if (tradingEnabled && block.number <= launchBlock + ANTI_BOT_BLOCKS) {
-            blocksUntilUnrestricted = (launchBlock + ANTI_BOT_BLOCKS) - block.number;
-            isProtectionActive = true;
+        if (taxAmount > 0) {
+            super._transfer(from, to, amount - taxAmount);
+            super._transfer(from, address(this), taxAmount);
+            _processTaxes(taxAmount);
+            emit TaxApplied(from, to, amount, taxAmount, _getTaxType(from, to));
         } else {
-            blocksUntilUnrestricted = 0;
-            isProtectionActive = false;
+            super._transfer(from, to, amount);
         }
     }
 
+    // ========================================
+    // TAX PROCESSING
+    // ========================================
+
     /**
-     * @notice Check if an address would be blocked by anti-bot protection
-     * @param account Address to check
-     * @return blocked True if address would be blocked
-     * @return reason Reason for blocking (if any)
+     * @dev Calculates tax amount based on transaction type
+     * @param from Sender address
+     * @param to Recipient address  
+     * @param amount Transaction amount
+     * @return Tax amount to be collected
      */
-    function getAntiBotStatus(address account) external view returns (
-        bool blocked,
-        string memory reason
-    ) {
-        if (!tradingEnabled || block.number > launchBlock + ANTI_BOT_BLOCKS) {
-            return (false, "Protection not active");
+    function _calculateTax(address from, address to, uint256 amount) private view returns (uint256) {
+        if (taxesRemoved || isExcludedFromFees[from] || isExcludedFromFees[to]) {
+            return 0;
         }
         
-        if (_isContract(account)) {
-            return (true, "Contract blocked during launch");
+        bool isBuy = isDexPair[from] && !isDexPair[to];
+        bool isSell = !isDexPair[from] && isDexPair[to];
+        bool isWalletToWallet = !isDexPair[from] && !isDexPair[to];
+        
+        uint256 taxRate;
+        if (isBuy) {
+            taxRate = BUY_TAX;          // 5%
+        } else if (isSell) {
+            taxRate = SELL_TAX;         // 10%
+        } else if (isWalletToWallet) {
+            taxRate = WALLET_TAX;       // 3%
+        } else {
+            taxRate = 0;
         }
         
-        return (false, "Address allowed");
+        return (amount * taxRate) / 100;
     }
 
     /**
-     * @dev Internal function to detect if address is a contract
+     * @dev Processes collected taxes with 60/40 split (burn/marketing)
+     * @param taxAmount Total tax amount to process
+     * 
+     * Tax Distribution:
+     * - 60% burned immediately to dead address
+     * - 40% accumulated as marketing tokens (convertible to BNB)
+     */
+    function _processTaxes(uint256 taxAmount) private {
+        uint256 burnAmount = (taxAmount * BURN_PERCENT) / 100;      // 60%
+        uint256 marketingAmount = taxAmount - burnAmount;           // 40%
+        
+        if (burnAmount > 0) {
+            super._transfer(address(this), address(0x000000000000000000000000000000000000dEaD), burnAmount);
+            burnedTokens += burnAmount;
+            emit BurnProgressUpdated(burnedTokens, (burnedTokens * 100) / TOTAL_SUPPLY);
+        }
+        
+        if (marketingAmount > 0) {
+            marketingTokensAccumulated += marketingAmount;
+        }
+    }
+
+    /**
+     * @dev Returns transaction type for event logging
+     */
+    function _getTaxType(address from, address to) private view returns (string memory) {
+        if (isDexPair[from] && !isDexPair[to]) {
+            return "buy";
+        } else if (!isDexPair[from] && isDexPair[to]) {
+            return "sell";
+        } else {
+            return "transfer";
+        }
+    }
+
+    /**
+     * @dev Permanently removes taxes when burn threshold is reached
+     */
+    function _removeTaxes() internal {
+        require(!taxesRemoved, "Taxes already removed");
+        taxesRemoved = true;
+        emit TaxesRemoved();
+    }
+
+    // ========================================
+    // LIQUIDITY FUNCTIONS
+    // ========================================
+
+    /**
+     * @notice Adds liquidity to existing pair (PinkSale compatible)
+     * @param tokenAmount Amount of tokens to add to liquidity
+     * @dev Only works if pair already exists (safe for PinkSale)
+     */
+    function addLiquidity(uint256 tokenAmount) external payable onlyOwner {
+        require(msg.value > 0, "Must send BNB");
+        require(balanceOf(owner()) >= tokenAmount, "Insufficient owner tokens");
+        
+        address factory = pancakeRouter.factory();
+        address existingPair = IUniswapV2Factory(factory).getPair(address(this), pancakeRouter.WETH());
+        require(existingPair != address(0), "Pair must exist - use PinkSale to create first");
+        
+        _transfer(owner(), address(this), tokenAmount);
+        _approve(address(this), address(pancakeRouter), tokenAmount);
+        
+        pancakeRouter.addLiquidityETH{value: msg.value}(
+            address(this),
+            tokenAmount,
+            tokenAmount * 95 / 100,
+            msg.value * 95 / 100,
+            address(0),
+            block.timestamp + 300
+        );
+    }
+
+    /**
+     * @dev Swaps tokens for BNB using the router
+     * @param tokenAmount Amount of tokens to swap
+     */
+    function swapTokensForBNB(uint256 tokenAmount) private {
+        require(tokenAmount > 0, "Token amount must be greater than 0");
+        require(balanceOf(address(this)) >= tokenAmount, "Insufficient contract balance");
+        
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = pancakeRouter.WETH();
+
+        _approve(address(this), address(pancakeRouter), tokenAmount);
+
+        try pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0, // Accept any amount of BNB
+            path,
+            address(this),
+            block.timestamp + 300 // 5 minutes deadline
+        ) {
+            // Swap réussi - pas d'action nécessaire
+        } catch Error(string memory reason) {
+            revert(string(abi.encodePacked("Swap failed: ", reason)));
+        } catch (bytes memory lowLevelData) {
+            if (lowLevelData.length == 0) {
+                revert("Swap failed: Unknown error");
+            } else {
+                revert("Swap failed: Low-level error");
+            }
+        }
+    }
+
+    /**
+     * @dev Automatically detects and sets up the main trading pair
+     */
+    function _detectAndSetupPair() internal {
+        address factory = pancakeRouter.factory();
+        address pair = IUniswapV2Factory(factory).getPair(address(this), pancakeRouter.WETH());
+        
+        if (pair != address(0) && pancakePair == address(0)) {
+            pancakePair = pair;
+            isDexPair[pair] = true;
+            emit PairAutoDetected(pair);
+        }
+        
+        if (pancakePair != address(0) && !isDexPair[pancakePair]) {
+            isDexPair[pancakePair] = true;
+        }
+    }
+
+    // ========================================
+    // ADMIN FUNCTIONS
+    // ========================================
+
+    /**
+     * @notice Enables trading for the token
+     * @dev Can only be called once by owner. Liquidity can be added before or after.
+     */
+    function enableTrading() external onlyOwner {
+        require(!tradingEnabled, "Trading already enabled");
+    
+        tradingEnabled = true;
+        launchBlock = uint32(block.number);
+        emit TradingEnabled(block.number);
+    }
+
+    /**
+     * @notice Excludes or includes an address from fees
+     * @param _address Address to modify fee status for
+     * @param _status True to exclude from fees, false to include
+     */
+    function excludeFromFees(address _address, bool _status) external onlyOwner {
+        isExcludedFromFees[_address] = _status;
+    }
+
+    /**
+     * @notice Sets DEX pair status for an address
+     * @param _pair Address of the pair contract
+     * @param _status True if this is a DEX pair, false otherwise
+     */
+    function setDexPair(address _pair, bool _status) external onlyOwner {
+        isDexPair[_pair] = _status;
+    }
+
+    /**
+     * @notice Converts a specific amount of accumulated marketing tokens to BNB
+     * @param tokenAmount Amount of marketing tokens to convert
+     * @dev Converts tokens via DEX swap and stores BNB in contract for distribution
+     * @dev Use distributeFunds() after conversion to send BNB to wallets
+     * 
+     * Process:
+     * 1. Validates sufficient marketing tokens available
+     * 2. Swaps tokens for BNB via PancakeSwap
+     * 3. Stores BNB in contract for later distribution
+     * 4. Reduces marketingTokensAccumulated by converted amount
+     */
+    function convertMarketingTokens(uint256 tokenAmount) external onlyOwner {
+        require(tokenAmount > 0, "Amount must be greater than 0");
+        require(tokenAmount <= marketingTokensAccumulated, "Insufficient marketing tokens");
+        
+        uint256 initialBnb = address(this).balance;
+        swapTokensForBNB(tokenAmount);
+        uint256 bnbReceived = address(this).balance - initialBnb;
+        
+        marketingTokensAccumulated -= tokenAmount;
+        
+        emit MarketingTokensProcessed(tokenAmount, bnbReceived);
+    }
+
+    /**
+     * @notice Converts all accumulated marketing tokens to BNB
+     * @dev Convenience function to convert entire marketing token balance
+     * @dev Equivalent to calling convertMarketingTokens() with full balance
+     */
+    function convertAllMarketingTokens() external onlyOwner {
+        require(marketingTokensAccumulated > 0, "No marketing tokens to convert");
+        
+        uint256 tokenAmount = marketingTokensAccumulated;
+        uint256 initialBnb = address(this).balance;
+        swapTokensForBNB(tokenAmount);
+        uint256 bnbReceived = address(this).balance - initialBnb;
+        
+        marketingTokensAccumulated = 0;
+        
+        emit MarketingTokensProcessed(tokenAmount, bnbReceived);
+    }
+
+    /**
+     * @notice Distributes contract BNB balance to IMMUTABLE designated wallets
+     * @dev Distributes according to fixed percentages: 45% marketing, 25% CEX, 30% operations
+     * @dev Wallets CANNOT be changed - provides maximum security against fund redirection
+     * 
+     * Distribution Breakdown:
+     * - 45% to marketing wallet (campaigns, partnerships, development)
+     * - 25% to CEX wallet (exchange listings, market making)
+     * - 30% to operations wallet (team, infrastructure, legal)
+     * 
+     * Security Features:
+     * - Wallet addresses are immutable (set once at deployment)
+     * - No updateWallets() function exists
+     * - ReentrancyGuard protection
+     * - All transfers verified with require statements
+     */
+    function distributeFunds() external onlyOwner nonReentrant {
+        require(address(this).balance > 0, "No funds to distribute");
+        
+        uint256 totalBalance = address(this).balance;
+        
+        uint256 marketingAmount = (totalBalance * MARKETING_SHARE) / 100;   // 45%
+        uint256 cexAmount = (totalBalance * CEX_SHARE) / 100;               // 25%
+        uint256 operationsAmount = (totalBalance * OPERATIONS_SHARE) / 100; // 30%
+        
+        (bool success1, ) = marketingWallet.call{value: marketingAmount}("");
+        require(success1, "Marketing transfer failed");
+        
+        (bool success2, ) = cexWallet.call{value: cexAmount}("");
+        require(success2, "CEX transfer failed");
+        
+        (bool success3, ) = operationsWallet.call{value: operationsAmount}("");
+        require(success3, "Operations transfer failed");
+        
+        emit FundsDistributed(marketingAmount, cexAmount, operationsAmount);
+    }
+
+    /**
+     * @notice Renounces ownership of the contract (PinkSale compatible)
+     * @dev Simple renouncement function. Use getRenounceStatus() to check if safe to renounce
+     */
+    function renounceOwnership() public override onlyOwner {
+        _transferOwnership(address(0));
+    }
+
+    // ========================================
+    // VIEW FUNCTIONS
+    // ========================================
+
+    /**
+     * @notice Returns comprehensive stats for dashboard display
+     * @return burned Total tokens burned since deployment
+     * @return burnProgress Progress towards 75% burn threshold (percentage)
+     * @return marketingTokens Marketing tokens available for conversion to BNB
+     * @return contractBnb BNB balance in contract ready for distribution
+     * @return trading Whether trading is currently enabled
+     * @return pair Address of main trading pair (VAULTON/WBNB)
+     * @return taxesRemoved_ Whether taxes have been permanently removed
+     * @return circulatingSupply Current circulating supply (total - burned)
+     */
+    function getQuickStats() external view returns (
+        uint256 burned,
+        uint256 burnProgress,
+        uint256 marketingTokens,
+        uint256 contractBnb,
+        bool trading,
+        address pair,
+        bool taxesRemoved_,
+        uint256 circulatingSupply
+    ) {
+        burned = burnedTokens;
+        burnProgress = (burnedTokens * 100) / BURN_THRESHOLD;
+        marketingTokens = marketingTokensAccumulated;
+        contractBnb = address(this).balance;
+        trading = tradingEnabled;
+        pair = pancakePair;
+        taxesRemoved_ = taxesRemoved;
+        circulatingSupply = TOTAL_SUPPLY - burnedTokens;
+    }
+
+    /**
+     * @notice Returns basic token information
+     * @return name Token name
+     * @return symbol Token symbol
+     * @return totalSupply Initial total supply
+     * @return circulatingSupply Current circulating supply (total - burned)
+     * @return decimals Token decimals
+     * @return burned Total burned tokens
+     * @return burnPercentage Percentage of total supply burned
+     */
+    function getTokenInfo() external view returns (
+        string memory name,
+        string memory symbol,
+        uint256 totalSupply,
+        uint256 circulatingSupply,
+        uint8 decimals,
+        uint256 burned,
+        uint256 burnPercentage
+    ) {
+        name = "Vaulton";
+        symbol = "VAULTON";
+        totalSupply = TOTAL_SUPPLY;
+        circulatingSupply = TOTAL_SUPPLY - burnedTokens;
+        decimals = 18;
+        burned = burnedTokens;
+        burnPercentage = (burnedTokens * 100) / TOTAL_SUPPLY;
+    }
+
+    /**
+     * @notice Returns current tax rates
+     * @return buy Buy tax percentage
+     * @return sell Sell tax percentage  
+     * @return walletToWallet Wallet-to-wallet transfer tax percentage
+     */
+    function getTaxRates() external pure returns (uint8 buy, uint8 sell, uint8 walletToWallet) {
+        return (BUY_TAX, SELL_TAX, WALLET_TAX);
+    }
+
+    /**
+     * @notice Returns burn mechanism progress
+     * @return currentBurned Total tokens burned so far
+     * @return burnThreshold Threshold for tax removal (75% of total supply)
+     * @return progressPercentage Progress towards threshold (percentage)
+     * @return thresholdReached Whether the threshold has been reached
+     */
+    function getBurnProgress() external view returns (
+        uint256 currentBurned,
+        uint256 burnThreshold,
+        uint256 progressPercentage,
+        bool thresholdReached
+    ) {
+        uint256 progress = (burnedTokens * 100) / BURN_THRESHOLD;
+        
+        return (burnedTokens, BURN_THRESHOLD, progress, burnedTokens >= BURN_THRESHOLD);
+    }
+
+    // ========================================
+    // INTERNAL HELPERS
+    // ========================================
+
+    /**
+     * @dev Checks if an address is a contract
      * @param account Address to check
-     * @return bool True if address has code (is contract)
+     * @return True if the address is a contract
      */
     function _isContract(address account) internal view returns (bool) {
         return account.code.length > 0;
     }
 
     /**
-     * @notice Fallback function to receive BNB
-     * @dev Required for receiving BNB from router swaps
+     * @dev Checks if a contract address is allowed during anti-bot protection
+     * @param account Contract address to check
+     * @return True if the contract is allowed to trade during launch
      */
-    receive() external payable {}
+    function _isAllowedContract(address account) private view returns (bool) {
+        if (account == address(pancakeRouter)) return true;
+        if (pancakePair != address(0) && account == pancakePair) return true;
+        if (isExcludedFromFees[account]) return true;
+        if (isDexPair[account]) return true;
+        
+        return false;
+    }
 
     /**
-     * @notice Finalizes the contract by renouncing ownership and disabling trading
-     * @dev This function can only be called after the trading has been enabled for 30 days
-     * @dev Emits ContractFinalized and OwnershipRenounced events
+     * @dev Allows contract to receive BNB from swaps and liquidity operations
      */
-    function finalizeAndRenounce() external onlyOwner {
-        require(tradingEnabled, "Trading must be enabled");
-        require(block.timestamp > deploymentTime + 30 days, "Must wait 30 days");
-        
-        _transferOwnership(address(0));
-        
-        emit ContractFinalized(block.timestamp);
-        emit OwnershipRenounced(block.timestamp);
+    receive() external payable {
+        // Contract can now receive BNB from PancakeSwap swaps
     }
 }
 

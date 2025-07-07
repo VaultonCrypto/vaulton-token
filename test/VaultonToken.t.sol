@@ -6,626 +6,656 @@ import "forge-std/console.sol";
 import "../src/VaultonToken.sol";
 
 /**
- * @title MockRouter
- * @dev Mock PancakeSwap router for testing liquidity operations
+ * @title MockRouter - PancakeSwap Router Mock for Testing
+ * @dev Simplified mock implementation of PancakeSwap V2 Router
+ * @notice This mock simulates real DEX behavior for comprehensive testing
+ * Used for testing buyback mechanism without external dependencies
  */
 contract MockRouter {
     address public WETH = 0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270;
     
-    /// @dev Returns this contract as factory
     function factory() external view returns (address) {
         return address(this);
     }
     
-    /// @dev Returns a fixed pair address for testing
     function getPair(address, address) external pure returns (address) {
         return address(0x1234567890123456789012345678901234567890);
     }
     
-    /// @dev Mock liquidity addition that always succeeds
-    function addLiquidityETH(
-        address,
-        uint amountTokenDesired,
-        uint,
-        uint,
-        address,
-        uint
-    ) external payable returns (uint, uint, uint) {
-        return (amountTokenDesired, msg.value, 1000);
-    }
-    
-    /// @dev Mock swap function (no-op)
+    /**
+     * @dev Simulates selling tokens for BNB (1 token = 0.001 BNB for testing)
+     * @notice Real implementation would interact with liquidity pools
+     */
     function swapExactTokensForETHSupportingFeeOnTransferTokens(
-        uint,
+        uint amountIn,
         uint,
         address[] calldata,
-        address,
+        address to,
         uint
-    ) external {}
+    ) external {
+        uint256 bnbAmount = amountIn / 1000;
+        payable(to).transfer(bnbAmount);
+    }
+    
+    /**
+     * @dev Simulates buying tokens with BNB (1 BNB = 1000 tokens for testing)
+     * @notice Real implementation would interact with liquidity pools
+     */
+    function swapExactETHForTokensSupportingFeeOnTransferTokens(
+        uint,
+        address[] calldata path,
+        address to,
+        uint
+    ) external payable {
+        uint256 tokenAmount = msg.value * 1000;
+        
+        require(path.length == 2, "Invalid path");
+        require(path[0] == WETH, "Invalid path start");
+        
+        Vaulton token = Vaulton(payable(path[1]));
+        
+        if (token.balanceOf(address(this)) >= tokenAmount) {
+            token.transfer(to, tokenAmount);
+        }
+    }
+    
+    receive() external payable {}
 }
 
 /**
- * @title SmartMockRouter
- * @dev Advanced mock router with controllable pair existence
- */
-contract SmartMockRouter {
-    address public WETH = 0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270;
-    
-    bool public shouldReturnPair = false;
-    
-    /// @dev Returns this contract as factory
-    function factory() external view returns (address) {
-        return address(this);
-    }
-    
-    /// @dev Controls whether getPair returns a valid address
-    function setPairExists(bool _exists) external {
-        shouldReturnPair = _exists;
-    }
-    
-    /// @dev Returns pair address based on shouldReturnPair flag
-    function getPair(address, address) external view returns (address) {
-        return shouldReturnPair ? address(0x1234567890123456789012345678901234567890) : address(0);
-    }
-    
-    /// @dev Mock liquidity addition that sets pair as existing
-    function addLiquidityETH(
-        address,
-        uint amountTokenDesired,
-        uint,
-        uint,
-        address,
-        uint
-    ) external payable returns (uint, uint, uint) {
-        shouldReturnPair = true;
-        return (amountTokenDesired, msg.value, 1000);
-    }
-    
-    /// @dev Mock swap function (no-op)
-    function swapExactTokensForETHSupportingFeeOnTransferTokens(
-        uint,
-        uint,
-        address[] calldata,
-        address,
-        uint
-    ) external {}
-}
-
-/**
- * @title MockContract
- * @dev Mock contract to test anti-bot protection
- */
-contract MockContract {
-    /// @dev Attempts to transfer tokens (for anti-bot testing)
-    function attemptTransfer(address token, address to, uint256 amount) external {
-        Vaulton(payable(token)).transfer(to, amount);
-    }
-}
-
-/**
- * @title VaultonTest
- * @dev Comprehensive test suite for Vaulton token contract
+ * @title VaultonTest - Comprehensive Test Suite for Vaulton Token
+ * @dev Complete testing framework covering all contract functionality
+ * @notice Tests validate the revolutionary 36% buyback control mechanism
+ * 
+ * Key Testing Areas:
+ * - Core buyback mechanism functionality
+ * - Security validations and access controls
+ * - Mathematical deflation guarantees
+ * - PinkSale compatibility features
+ * - View functions for transparency
+ * - Edge cases and error handling
  */
 contract VaultonTest is Test {
-    // ========================================
-    // STATE VARIABLES
-    // ========================================
-    
     Vaulton public vaulton;
     MockRouter public mockRouter;
-    SmartMockRouter public smartMockRouter;
     
     address public owner;
-    address public marketingWallet;
-    address public cexWallet;
-    address public operationsWallet;
     address public user1;
-    address public user2;
-    address public dexPair;
+    address public mockPair;
     
-    uint256 constant TOTAL_SUPPLY = 50_000_000 * 10**18;
-    uint256 constant INITIAL_BURN = 15_000_000 * 10**18;
-    uint256 constant BURN_THRESHOLD = (TOTAL_SUPPLY * 75) / 100;
+    // Token Economics Constants - Mirror contract values for validation
+    uint256 constant TOTAL_SUPPLY = 30_000_000 * 10**18;        // 30M total supply
+    uint256 constant INITIAL_BURN = 15_000_000 * 10**18;        // 50% initial burn
+    uint256 constant BUYBACK_RESERVE = 5_400_000 * 10**18;      // 36% buyback control
+    uint256 constant PRESALE_ALLOCATION = 3_300_000 * 10**18;   // 11% presale
+    uint256 constant LIQUIDITY_ALLOCATION = 2_100_000 * 10**18; // 7% liquidity
+    uint256 constant CEX_ALLOCATION = 2_700_000 * 10**18;       // 9% CEX listing
+    uint256 constant FOUNDER_ALLOCATION = 1_500_000 * 10**18;   // 5% founder
     
-    // ========================================
-    // SETUP
-    // ========================================
-    
+    /**
+     * @dev Test environment setup
+     * @notice Deploys contract and configures test environment
+     * - Deploys mock router with sufficient liquidity
+     * - Sets up trading environment
+     * - Allocates tokens for comprehensive testing
+     */
     function setUp() public {
         owner = address(this);
-        marketingWallet = address(0x1111);
-        cexWallet = address(0x2222);
-        operationsWallet = address(0x3333);
-        user1 = address(0x4444);
-        user2 = address(0x5555);
-        dexPair = address(0x6666);
+        user1 = address(0x1111);
+        mockPair = address(0x1234567890123456789012345678901234567890);
         
+        // Deploy mock router with sufficient BNB for testing
         mockRouter = new MockRouter();
-        smartMockRouter = new SmartMockRouter();
+        vm.deal(address(mockRouter), 1000 ether);
         
-        vaulton = new Vaulton(
-            address(mockRouter),
-            marketingWallet,
-            cexWallet,
-            operationsWallet
-        );
+        // Deploy Vaulton token with router integration
+        vaulton = new Vaulton(address(mockRouter));
         
-        assertEq(vaulton.owner(), owner);
-        vaulton.setDexPair(dexPair, true);
+        // Provide sufficient tokens to mock router for buyback simulations
+        vaulton.transfer(address(mockRouter), 5_000_000 * 10**18);
         
-        vaulton.transfer(user1, 1000000 * 10**18);
-        vaulton.transfer(user2, 1000000 * 10**18);
+        // Configure trading environment
+        vaulton.setPancakePair(mockPair);
+        vaulton.enableTrading();
         
-        vm.deal(address(this), 10 ether);
+        // Fund contract with BNB for testing
+        vm.deal(address(vaulton), 10 ether);
+        
+        // Allocate tokens to test accounts
+        vaulton.transfer(user1, 100_000 * 10**18);
     }
-
+    
     // ========================================
     // CORE FUNCTIONALITY TESTS
     // ========================================
     
+    /**
+     * @dev Validates correct deployment and tokenomics setup
+     * @notice Critical test ensuring all initial parameters are correct
+     * Validates:
+     * - Token metadata (name, symbol)
+     * - Initial burn implementation (50% of supply)
+     * - Buyback reserve allocation (36% control)
+     * - Owner token balance after all allocations
+     */
     function testDeployment() public view {
         assertEq(vaulton.name(), "Vaulton");
         assertEq(vaulton.symbol(), "VAULTON");
-        assertEq(vaulton.totalSupply(), TOTAL_SUPPLY - INITIAL_BURN);
         assertEq(vaulton.burnedTokens(), INITIAL_BURN);
-        assertEq(vaulton.owner(), owner);
+        assertEq(vaulton.buybackTokensRemaining(), BUYBACK_RESERVE);
+        assertEq(vaulton.balanceOf(address(vaulton)), BUYBACK_RESERVE);
         
-        assertEq(vaulton.marketingWallet(), marketingWallet);
-        assertEq(vaulton.cexWallet(), cexWallet);
-        assertEq(vaulton.operationsWallet(), operationsWallet);
-        
-        assertFalse(vaulton.tradingEnabled());
-        assertFalse(vaulton.taxesRemoved());
+        // Validate owner balance after all test allocations
+        // Total: 30M - 15M(burned) - 5.4M(contract) - 5M(mock) - 0.1M(user1) = 4.5M
+        uint256 expectedOwnerTokens = 4_500_000 * 10**18;
+        assertEq(vaulton.balanceOf(owner), expectedOwnerTokens);
     }
     
-    function testWalletImmutability() public view {
-        assertEq(vaulton.marketingWallet(), marketingWallet);
-        assertEq(vaulton.cexWallet(), cexWallet);
-        assertEq(vaulton.operationsWallet(), operationsWallet);
+    /**
+     * @dev Tests core buyback selling mechanism
+     * @notice Validates the first phase of the revolutionary buyback system
+     * Tests:
+     * - Token-to-BNB conversion through DEX
+     * - Reserve depletion tracking
+     * - Cycle initialization and state management
+     * - Event emission for transparency
+     */
+    function testSellBuybackTokens() public {
+        uint256 sellAmount = 150_000 * 10**18;
+        uint256 initialRemaining = vaulton.buybackTokensRemaining();
+        
+        vaulton.sellBuybackTokens(sellAmount);
+        
+        // Validate reserve depletion
+        assertEq(vaulton.buybackTokensRemaining(), initialRemaining - sellAmount);
+        assertGt(vaulton.buybackBNBBalance(), 0);
+        assertEq(vaulton.totalBuybackCycles(), 1);
+        
+        // Validate cycle tracking
+        (uint256 tokensSold, uint256 bnbReceived, uint256 tokensBought, , , bool completed) = vaulton.getBuybackCycle(1);
+        assertEq(tokensSold, sellAmount);
+        assertGt(bnbReceived, 0);
+        assertEq(tokensBought, 0);
+        assertFalse(completed);
     }
     
-    function testBurnMechanism() public {
-        uint256 initialBurnedTokens = vaulton.burnedTokens();
+    /**
+     * @dev Validates security controls for selling mechanism
+     * @notice Critical security test ensuring proper access control and limits
+     * Tests:
+     * - Zero amount rejection
+     * - Reserve insufficiency protection
+     * - Maximum transaction limit (0.5% of total supply)
+     * - Owner-only access control
+     */
+    function testSellBuybackTokensValidations() public {
+        vm.expectRevert("Amount must be positive");
+        vaulton.sellBuybackTokens(0);
         
-        _setupTradingWithPair();
+        uint256 tooLarge = BUYBACK_RESERVE + 1;
+        vm.expectRevert("Insufficient buyback reserve");
+        vaulton.sellBuybackTokens(tooLarge);
+        
+        uint256 tooMuch = (TOTAL_SUPPLY / 200) + 1; // > 0.5%
+        vm.expectRevert("Max 0.5% per transaction");
+        vaulton.sellBuybackTokens(tooMuch);
         
         vm.prank(user1);
-        vaulton.transfer(dexPair, 1000 * 10**18);
-        
-        uint256 newBurnedTokens = vaulton.burnedTokens();
-        assertGt(newBurnedTokens, initialBurnedTokens);
+        vm.expectRevert("Ownable: caller is not the owner");
+        vaulton.sellBuybackTokens(100_000 * 10**18);
     }
     
-    function testBurnThreshold() public view {
-        (uint256 currentBurned, uint256 burnThreshold, , bool thresholdReached) = vaulton.getBurnProgress();
+    /**
+     * @dev Tests core buyback and burn mechanism
+     * @notice Validates the second phase of the revolutionary buyback system
+     * Tests:
+     * - BNB-to-token conversion through DEX
+     * - Automatic token burning for deflation
+     * - Cycle completion and state reset
+     * - Mathematical deflation guarantee
+     */
+    function testBuybackAndBurnSimplified() public {
+        uint256 sellAmount = 150_000 * 10**18;
+        vaulton.sellBuybackTokens(sellAmount);
         
-        assertEq(burnThreshold, (TOTAL_SUPPLY * 75) / 100);
-        assertFalse(thresholdReached);
-        assertFalse(vaulton.taxesRemoved());
-        assertEq(currentBurned, INITIAL_BURN);
+        uint256 initialBurned = vaulton.burnedTokens();
+        
+        vaulton.buybackAndBurn();
+        
+        // Validate buyback completion
+        assertEq(vaulton.buybackBNBBalance(), 0);
+        assertGt(vaulton.burnedTokens(), initialBurned);
+        
+        // Validate cycle completion
+        (, , uint256 tokensBought, uint256 tokensBurned, , bool completed) = vaulton.getBuybackCycle(1);
+        assertGt(tokensBought, 0);
+        assertEq(tokensBurned, tokensBought);
+        assertTrue(completed);
     }
     
-    function testMarketingTokenAccumulation() public {
-        uint256 initialMarketing = vaulton.marketingTokensAccumulated();
+    /**
+     * @dev Validates security controls for buyback mechanism
+     * @notice Ensures proper state validation and access control
+     * Tests:
+     * - BNB availability requirement
+     * - Owner-only access control
+     * - Proper error handling
+     */
+    function testBuybackAndBurnValidations() public {
+        vm.expectRevert("No BNB available for buyback");
+        vaulton.buybackAndBurn();
         
-        _setupTradingWithPair();
+        vaulton.sellBuybackTokens(100_000 * 10**18);
         
         vm.prank(user1);
-        vaulton.transfer(user2, 1000 * 10**18);
-        
-        uint256 newMarketing = vaulton.marketingTokensAccumulated();
-        assertGt(newMarketing, initialMarketing);
+        vm.expectRevert("Ownable: caller is not the owner");
+        vaulton.buybackAndBurn();
     }
     
-    function testMarketingTokenConversion() public {
-        _setupTradingWithPair();
+    /**
+     * @dev Tests complete buyback cycle integration
+     * @notice Validates end-to-end buyback process
+     * Tests:
+     * - Full cycle execution (sell -> buyback -> burn)
+     * - State consistency throughout process
+     * - Mathematical accuracy of deflation
+     * - Proper cycle tracking and completion
+     */
+    function testCompleteBuybackCycleSimplified() public {
+        uint256 sellAmount = 150_000 * 10**18;
+        uint256 initialBurned = vaulton.burnedTokens();
+        uint256 initialRemaining = vaulton.buybackTokensRemaining();
         
-        vm.prank(user1);
-        vaulton.transfer(user2, 10000 * 10**18);
+        vaulton.sellBuybackTokens(sellAmount);
+        vaulton.buybackAndBurn();
         
-        uint256 marketingTokens = vaulton.marketingTokensAccumulated();
+        // Validate final state
+        assertEq(vaulton.buybackTokensRemaining(), initialRemaining - sellAmount);
+        assertGt(vaulton.burnedTokens(), initialBurned);
+        assertEq(vaulton.buybackBNBBalance(), 0);
+        assertEq(vaulton.totalBuybackCycles(), 1);
         
-        if (marketingTokens > 0) {
-            uint256 convertAmount = marketingTokens / 2;
-            vaulton.convertMarketingTokens(convertAmount);
+        // Validate cycle data integrity
+        (, , uint256 tokensBought, uint256 tokensBurned, , bool completed) = vaulton.getBuybackCycle(1);
+        assertGt(tokensBought, 0);
+        assertEq(tokensBurned, tokensBought);
+        assertTrue(completed);
+    }
+    
+    /**
+     * @dev Tests multiple consecutive buyback cycles
+     * @notice Validates system performance under repeated operations
+     * Tests:
+     * - Multiple cycle execution without cooldown restrictions
+     * - Cumulative deflation effects
+     * - State consistency across cycles
+     * - Cycle numbering and tracking accuracy
+     */
+    function testMultipleBuybackCyclesSimplified() public {
+        for(uint i = 1; i <= 3; i++) {
+            // Execute immediate consecutive cycles (no cooldown)
+            vaulton.sellBuybackTokens(100_000 * 10**18);
+            vaulton.buybackAndBurn();
             
-            assertEq(vaulton.marketingTokensAccumulated(), marketingTokens - convertAmount);
+            assertEq(vaulton.totalBuybackCycles(), i);
+            
+            // Validate each cycle completion
+            (, , uint256 tokensBought, uint256 tokensBurned, , bool completed) = vaulton.getBuybackCycle(i);
+            assertGt(tokensBought, 0);
+            assertEq(tokensBurned, tokensBought);
+            assertTrue(completed);
         }
     }
-
-    // ========================================
-    // TRADING RESTRICTIONS TESTS
-    // ========================================
     
-    function testTransferBeforeTradingEnabled() public {
-        vm.prank(user1);
-        vm.expectRevert("Trading not enabled");
-        vaulton.transfer(user2, 1000 * 10**18);
+    /**
+     * @dev Tests comprehensive sell mechanism functionality
+     * @notice Validates cumulative effects of multiple buyback operations
+     * Tests:
+     * - Progressive reserve depletion
+     * - Cumulative deflation measurement
+     * - State consistency across multiple operations
+     * - Mathematical accuracy of token economics
+     */
+    function testSellMechanismCore() public {
+        uint256 initialBurned = vaulton.burnedTokens();
+        uint256 initialBuybackReserve = vaulton.buybackTokensRemaining();
         
-        vaulton.transfer(user1, 1000 * 10**18);
-    }
-
-    // ========================================
-    // VIEW FUNCTION TESTS
-    // ========================================
-    
-    function testGetQuickStats() public {
-        _setupMockPairProperly();
+        uint256 cyclesCount = 3;
+        uint256 sellAmount = 100_000 * 10**18;
         
-        (
-            uint256 burned,
-            ,  // burnProgress not used in test
-            uint256 marketingTokens,
-            uint256 contractBnb,
-            bool trading,
-            ,  // pair not used in test
-            bool taxesRemoved_,
-            uint256 circulatingSupply
-        ) = vaulton.getQuickStats();
+        for(uint i = 0; i < cyclesCount; i++) {
+            vaulton.sellBuybackTokens(sellAmount);
+            assertGt(vaulton.buybackBNBBalance(), 0);
+            
+            vaulton.buybackAndBurn();
+        }
         
-        assertEq(burned, INITIAL_BURN);
-        assertEq(marketingTokens, 0);
-        assertEq(contractBnb, 0);
-        assertFalse(trading);
-        assertFalse(taxesRemoved_);
-        assertEq(circulatingSupply, TOTAL_SUPPLY - INITIAL_BURN);
+        // Validate cumulative effects
+        assertEq(vaulton.totalBuybackCycles(), cyclesCount);
+        assertEq(vaulton.buybackTokensRemaining(), initialBuybackReserve - (sellAmount * cyclesCount));
+        assertGt(vaulton.burnedTokens(), initialBurned);
+        assertEq(vaulton.buybackBNBBalance(), 0);
+        
+        // Verify mathematical deflation occurred
+        uint256 finalCirculating = TOTAL_SUPPLY - vaulton.burnedTokens();
+        uint256 initialCirculating = TOTAL_SUPPLY - initialBurned;
+        assertLt(finalCirculating, initialCirculating);
     }
     
-    function testGetTokenInfo() public view {
+    /**
+     * @dev Tests buyback reserve exhaustion scenarios
+     * @notice Validates system behavior at operational limits
+     * Tests:
+     * - Multiple cycles within transaction limits (0.5% max)
+     * - Reserve depletion tracking accuracy
+     * - Transaction limit enforcement
+     * - Reserve insufficiency protection
+     */
+    function testBuybackExhaustion() public {
+        uint256 initialRemaining = vaulton.buybackTokensRemaining();
+        
+        // Use maximum allowed transaction size (0.5% of total supply)
+        // Max per transaction = 30M / 200 = 150K tokens
+        uint256 sellAmount = 150_000 * 10**18;
+        
+        // Execute 5 cycles with maximum allowed amounts
+        for(uint i = 0; i < 5; i++) {
+            if (vaulton.buybackTokensRemaining() >= sellAmount) {
+                vaulton.sellBuybackTokens(sellAmount);
+                vaulton.buybackAndBurn();
+            }
+        }
+        
+        // Validate reserve depletion (5 x 150K = 750K tokens used)
+        uint256 expectedRemaining = initialRemaining - (5 * sellAmount);
+        assertEq(vaulton.buybackTokensRemaining(), expectedRemaining);
+        
+        // Test transaction limit enforcement
+        uint256 maxAllowed = TOTAL_SUPPLY / 200; // 150K tokens
+        vm.expectRevert("Max 0.5% per transaction");
+        vaulton.sellBuybackTokens(maxAllowed + 1);
+        
+        // Test reserve insufficiency protection
+        uint256 remaining = vaulton.buybackTokensRemaining();
+        if (remaining > 0 && remaining < maxAllowed) {
+            vm.expectRevert("Insufficient buyback reserve");
+            vaulton.sellBuybackTokens(remaining + 1);
+        }
+    }
+    
+    /**
+     * @dev Tests rapid consecutive buyback operations
+     * @notice Validates system performance under high-frequency operations
+     * Tests:
+     * - Immediate consecutive operations (no cooldown)
+     * - Gas efficiency under repeated calls
+     * - State consistency under rapid execution
+     * - Cumulative reserve depletion accuracy
+     */
+    function testRapidConsecutiveBuybacks() public {
+        uint256 sellAmount = 50_000 * 10**18;
+        
+        // Execute 5 rapid consecutive buyback cycles
+        for(uint i = 1; i <= 5; i++) {
+            vaulton.sellBuybackTokens(sellAmount);
+            vaulton.buybackAndBurn();
+            
+            assertEq(vaulton.totalBuybackCycles(), i);
+            assertEq(vaulton.buybackBNBBalance(), 0);
+        }
+        
+        // Validate cumulative token usage
+        uint256 expectedRemaining = BUYBACK_RESERVE - (sellAmount * 5);
+        assertEq(vaulton.buybackTokensRemaining(), expectedRemaining);
+    }
+    
+    // ========================================
+    // TRANSPARENCY & VIEW FUNCTION TESTS
+    // ========================================
+    
+    /**
+     * @dev Tests tokenomics transparency function
+     * @notice Critical test for investor and auditor transparency
+     * Validates:
+     * - Accurate total supply reporting
+     * - Correct circulating supply calculation
+     * - Burned tokens tracking accuracy
+     * - Reserve allocation verification
+     * - Community allocation calculations
+     */
+    function testGetTokenomics() public view {
         (
-            string memory name,
-            string memory symbol,
             uint256 totalSupply,
             uint256 circulatingSupply,
-            uint8 decimals,
-            uint256 burned,
-            uint256 burnPercentage
-        ) = vaulton.getTokenInfo();
+            uint256 burnedTokens_,
+            uint256 buybackReserve,
+            uint256 founderAllocation,
+            uint256 communityAllocation
+        ) = vaulton.getTokenomics();
         
-        assertEq(name, "Vaulton");
-        assertEq(symbol, "VAULTON");
         assertEq(totalSupply, TOTAL_SUPPLY);
         assertEq(circulatingSupply, TOTAL_SUPPLY - INITIAL_BURN);
-        assertEq(decimals, 18);
-        assertEq(burned, INITIAL_BURN);
-        assertEq(burnPercentage, (INITIAL_BURN * 100) / TOTAL_SUPPLY);
+        assertEq(burnedTokens_, INITIAL_BURN);
+        assertEq(buybackReserve, BUYBACK_RESERVE);
+        assertEq(founderAllocation, FOUNDER_ALLOCATION);
+        
+        uint256 expectedCommunity = PRESALE_ALLOCATION + LIQUIDITY_ALLOCATION + CEX_ALLOCATION;
+        assertEq(communityAllocation, expectedCommunity);
     }
     
-    function testGetTaxRates() public view {
-        (uint8 buy, uint8 sell, uint8 walletToWallet) = vaulton.getTaxRates();
+    /**
+     * @dev Tests buyback statistics transparency
+     * @notice Essential for monitoring the revolutionary 36% buyback control
+     * Validates:
+     * - Remaining buyback tokens accuracy
+     * - Used tokens calculation
+     * - BNB balance tracking
+     * - Control percentage calculation (36% initial)
+     * - Cycle completion counter
+     */
+    function testGetBuybackStats() public view {
+        (
+            uint256 tokensRemaining,
+            uint256 tokensUsed,
+            uint256 bnbBalance,
+            uint256 totalBurned,
+            uint256 controlPercentage,
+            uint256 cyclesCompleted,
+            bool nextCycleReady
+        ) = vaulton.getBuybackStats();
         
-        assertEq(buy, 5);
-        assertEq(sell, 10);
-        assertEq(walletToWallet, 3);
+        assertEq(tokensRemaining, BUYBACK_RESERVE);
+        assertEq(tokensUsed, 0);
+        assertEq(bnbBalance, 0);
+        assertEq(totalBurned, INITIAL_BURN);
+        assertEq(cyclesCompleted, 0);
+        assertFalse(nextCycleReady);
+        
+        // Validate 36% buyback control calculation
+        uint256 circulatingSupply = TOTAL_SUPPLY - INITIAL_BURN;
+        uint256 expectedControl = (BUYBACK_RESERVE * 100) / circulatingSupply;
+        assertEq(controlPercentage, expectedControl);
+    }
+    
+    /**
+     * @dev Tests security status reporting
+     * @notice Critical for auditors and security assessment
+     * Validates:
+     * - Buyback control percentage (36%)
+     * - Trading activation status
+     * - Liquidity pair configuration
+     * - Contract token balance
+     * - Community control distribution
+     */
+    function testGetSecurityStatus() public view {
+        (
+            uint256 buybackControlPercentage,
+            bool tradingActive,
+            bool pairSet,
+            uint256 contractBalance,
+            uint256 communityControl
+        ) = vaulton.getSecurityStatus();
+        
+        assertEq(buybackControlPercentage, 36); // Revolutionary 36% control
+        assertTrue(tradingActive);
+        assertTrue(pairSet);
+        assertEq(contractBalance, BUYBACK_RESERVE);
+        
+        uint256 communityTokens = PRESALE_ALLOCATION + LIQUIDITY_ALLOCATION + CEX_ALLOCATION;
+        uint256 expectedCommunityControl = (communityTokens * 100) / TOTAL_SUPPLY;
+        assertEq(communityControl, expectedCommunityControl);
     }
 
+    /**
+     * @dev Tests buyback cycle data validation
+     * @notice Ensures proper cycle tracking and data integrity
+     * Tests:
+     * - Invalid cycle ID rejection
+     * - Cycle numbering validation
+     * - Data retrieval accuracy
+     */
+    function testGetBuybackCycleValidations() public {
+        vm.expectRevert("Invalid cycle ID");
+        vaulton.getBuybackCycle(0);
+        
+        vm.expectRevert("Invalid cycle ID");
+        vaulton.getBuybackCycle(999);
+    }
+    
+    /**
+     * @dev Tests quick statistics dashboard function
+     * @notice Provides essential metrics for quick assessment
+     * Validates:
+     * - Burn progress percentage (50% initial)
+     * - Buyback power percentage (36% control)
+     * - Current circulating supply
+     * - Trading status confirmation
+     */
+    function testGetQuickStats() public view {
+        (
+            uint256 burnProgress,
+            uint256 buybackPower,
+            uint256 circulatingSupply,
+            bool trading
+        ) = vaulton.getQuickStats();
+        
+        assertEq(burnProgress, 50); // 50% initial burn
+        assertEq(buybackPower, 36); // 36% buyback control
+        assertEq(circulatingSupply, TOTAL_SUPPLY - INITIAL_BURN);
+        assertTrue(trading);
+    }
+    
     // ========================================
-    // ADMIN FUNCTION TESTS
+    // SECURITY & ACCESS CONTROL TESTS
     // ========================================
     
-    function testRenounceOwnership() public {
-        address currentOwner = vaulton.owner();
-        assertEq(currentOwner, owner);
+    /**
+     * @dev Tests critical access control mechanisms
+     * @notice Essential security test for owner-only functions
+     * Validates:
+     * - Buyback function access restriction
+     * - Administrative function protection
+     * - Proper error messaging for unauthorized access
+     */
+    function testOnlyOwnerFunctions() public {
+        vm.startPrank(user1);
         
-        vaulton.renounceOwnership();
-        assertEq(vaulton.owner(), address(0));
+        vm.expectRevert("Ownable: caller is not the owner");
+        vaulton.sellBuybackTokens(100_000 * 10**18);
+        
+        vm.expectRevert("Ownable: caller is not the owner");
+        vaulton.buybackAndBurn();
+        
+        vm.expectRevert("Ownable: caller is not the owner");
+        vaulton.setPancakePair(address(0x9999));
+        
+        vm.expectRevert("Ownable: caller is not the owner");
+        vaulton.enableTrading();
+        
+        vm.stopPrank();
     }
     
-    /// @dev Test manual renounce prerequisites (remplace getRenounceStatus)
-    function testRenouncePrerequisites() public view {
-        // Manual verification of renounce readiness
-        bool taxesRemoved = vaulton.taxesRemoved();
-        uint256 marketingTokens = vaulton.marketingTokensAccumulated();
-        uint256 contractBalance = address(vaulton).balance;
+    /**
+     * @dev Tests liquidity pair configuration security
+     * @notice Validates one-time pair setting mechanism
+     * Tests:
+     * - Pair already set protection
+     * - Invalid pair validation through factory
+     * - Security against unauthorized pair changes
+     */
+    function testSetPancakePairValidations() public {
+        // Test pair already set protection
+        vm.expectRevert("Pair already set");
+        vaulton.setPancakePair(mockPair);
         
-        assertFalse(taxesRemoved); // Should be false initially
-        assertEq(marketingTokens, 0); // Should be 0 initially
-        assertEq(contractBalance, 0); // Should be 0 initially
-        
-        // Not ready for renouncement initially
-        bool readyForRenounce = taxesRemoved && marketingTokens == 0 && contractBalance == 0;
-        assertFalse(readyForRenounce);
-    }
-    
-    function testWalletAddressesGetterFunction() public view {
-        assertEq(vaulton.marketingWallet(), marketingWallet);
-        assertEq(vaulton.cexWallet(), cexWallet);
-        assertEq(vaulton.operationsWallet(), operationsWallet);
-    }
-    
-    function testDexPairSetting() public {
-        address testPair = address(0x9999);
-        
-        vaulton.setDexPair(testPair, true);
-        assertTrue(vaulton.isDexPair(testPair));
-        
-        vaulton.setDexPair(testPair, false);
-        assertFalse(vaulton.isDexPair(testPair));
+        // Test invalid pair validation
+        Vaulton newToken = new Vaulton(address(mockRouter));
+        vm.expectRevert("Invalid pair contract");
+        newToken.setPancakePair(address(0x9999));
     }
 
-    // ========================================
-    // SECURITY TESTS
-    // ========================================
-    
-    function testFundsDistribution() public {
-        vm.deal(address(vaulton), 1 ether);
-        
-        uint256 initialMarketing = marketingWallet.balance;
-        uint256 initialCex = cexWallet.balance;
-        uint256 initialOperations = operationsWallet.balance;
-        
-        vaulton.distributeFunds();
-        
-        uint256 expectedMarketing = (1 ether * 45) / 100; // 45%
-        uint256 expectedCex = (1 ether * 25) / 100;       // 25%
-        uint256 expectedOperations = (1 ether * 30) / 100; // 30%
-        
-        assertEq(marketingWallet.balance - initialMarketing, expectedMarketing);
-        assertEq(cexWallet.balance - initialCex, expectedCex);
-        assertEq(operationsWallet.balance - initialOperations, expectedOperations);
+    /**
+     * @dev Tests trading enablement security
+     * @notice Validates one-time trading activation
+     * Tests:
+     * - Trading already enabled protection
+     * - One-time activation enforcement
+     */
+    function testEnableTradingValidations() public {
+        vm.expectRevert("Trading already enabled");
+        vaulton.enableTrading();
     }
     
-    function testAntiBotProtection() public {
-        _setupTradingWithPair();
+    /**
+     * @dev Tests transfer restrictions before trading
+     * @notice Validates controlled launch mechanism
+     * Tests:
+     * - Owner transfer privileges before launch
+     * - User transfer restrictions before trading
+     * - Proper error handling for restricted transfers
+     */
+    function testTransferBeforeTradingEnabled() public {
+        Vaulton newToken = new Vaulton(address(mockRouter));
         
-        MockContract maliciousContract = new MockContract();
-        vaulton.transfer(address(maliciousContract), 1000 * 10**18);
+        // Should allow owner transfers for setup
+        newToken.transfer(user1, 1000 * 10**18);
         
-        vm.expectRevert("Contract not allowed during launch");
-        maliciousContract.attemptTransfer(address(vaulton), user1, 100 * 10**18);
-        
-        vm.roll(block.number + 4);
-        maliciousContract.attemptTransfer(address(vaulton), user1, 100 * 10**18);
-    }
-
-    // ========================================
-    // TAX SYSTEM TESTS
-    // ========================================
-    
-    function testAddLiquidity() public {
-        // Test que addLiquidity fonctionne avec pair existante
-        smartMockRouter.setPairExists(true);
-        
-        Vaulton freshVaulton = new Vaulton(
-            address(smartMockRouter),
-            marketingWallet,
-            cexWallet,
-            operationsWallet
-        );
-        
-        uint256 tokenAmount = 1000000 * 10**18;
-        
-        // Test avec pair existante
-        freshVaulton.addLiquidity{value: 0.1 ether}(tokenAmount);
-        
-        // Vérifier que la liquidité a été ajoutée
-        assertTrue(true); // Si on arrive ici, pas d'erreur
+        // Should block user-to-user transfers before trading
+        vm.prank(user1);
+        vm.expectRevert("Trading not enabled");
+        newToken.transfer(address(0x2222), 100 * 10**18);
     }
     
-    function testAddLiquidityFailsWithoutPair() public {
-        // Test que addLiquidity échoue sans pair existante
-        smartMockRouter.setPairExists(false);
-        
-        Vaulton freshVaulton = new Vaulton(
-            address(smartMockRouter),
-            marketingWallet,
-            cexWallet,
-            operationsWallet
-        );
-        
-        uint256 tokenAmount = 1000000 * 10**18;
-        
-        // Doit échouer car pas de pair
-        vm.expectRevert("Pair must exist - use PinkSale to create first");
-        freshVaulton.addLiquidity{value: 0.1 ether}(tokenAmount);
+    /**
+     * @dev Tests PinkSale compatibility functions
+     * @notice Critical for PinkSale FairLaunch approval
+     * Validates:
+     * - Owner identification function
+     * - Tax status reporting (zero taxes)
+     * - Renouncement status checking
+     * - Mint function availability (none)
+     * - Burn function availability (yes)
+     */
+    function testOwnershipFunctions() public view {
+        assertEq(vaulton.getOwner(), owner);
+        assertFalse(vaulton.hasTax());        // Zero taxes
+        assertFalse(vaulton.isRenounced());   // Owner not renounced
+        assertFalse(vaulton.hasMintFunction()); // No mint capability
+        assertTrue(vaulton.hasBurnFunction());  // Burn capability for deflation
     }
     
-    function testTaxCalculation() public {
-        Vaulton freshVaulton = new Vaulton(
-            address(smartMockRouter),
-            marketingWallet,
-            cexWallet,
-            operationsWallet
-        );
+    /**
+     * @dev Tests BNB receiving capability
+     * @notice Validates contract's ability to receive BNB for operations
+     * Essential for buyback mechanism funding
+     */
+    function testReceiveFunction() public {
+        uint256 initialBalance = address(vaulton).balance;
         
-        smartMockRouter.setPairExists(true);
-        uint256 tokenAmount = 1000000 * 10**18;
-        freshVaulton.addLiquidity{value: 0.1 ether}(tokenAmount);
-        freshVaulton.enableTrading();
+        payable(address(vaulton)).transfer(1 ether);
         
-        address realPair = freshVaulton.pancakePair();
-        require(realPair != address(0), "Pair not created");
-        
-        uint256 amount = 1000 * 10**18;
-        
-        freshVaulton.transfer(address(0x9999), 1 * 10**18);
-        freshVaulton.setDexPair(realPair, true);
-        
-        // Test actual transfer
-        freshVaulton.transfer(realPair, amount * 3);
-        freshVaulton.excludeFromFees(user1, false);
-        
-        vm.prank(realPair);
-        uint256 balanceBefore = freshVaulton.balanceOf(user1);
-        freshVaulton.transfer(user1, amount);
-        uint256 balanceAfter = freshVaulton.balanceOf(user1);
-        
-        uint256 actualReceived = balanceAfter - balanceBefore;
-        
-        assertLe(actualReceived, amount);
-        assertGt(actualReceived, 0);
+        assertEq(address(vaulton).balance, initialBalance + 1 ether);
     }
-
- // ========================================
-// NOUVEAUX TESTS CRITIQUES - UNE SEULE VERSION
-// ========================================
-
-/// @dev Test tax removal threshold logic - VERSION SIMPLIFIÉE
-function testTaxRemovalAtThreshold() public {
-    _setupTradingWithPair();
     
-    // Test threshold logic without forcing it
-    (uint256 currentBurned, uint256 burnThreshold, , bool thresholdReached) = vaulton.getBurnProgress();
-    
-    // Verify initial state
-    assertEq(currentBurned, INITIAL_BURN);
-    assertEq(burnThreshold, BURN_THRESHOLD);
-    assertFalse(thresholdReached);
-    assertFalse(vaulton.taxesRemoved());
-    
-    // Verify threshold calculation is correct
-    assertEq(burnThreshold, (TOTAL_SUPPLY * 75) / 100);
-    
-    // Verify we're not at threshold initially
-    assertLt(currentBurned, burnThreshold);
-    
-    // Test tax application works before threshold
-    uint256 balanceBefore = vaulton.balanceOf(user2);
-    vm.prank(user1);
-    vaulton.transfer(user2, 1000 * 10**18);
-    uint256 balanceAfter = vaulton.balanceOf(user2);
-    
-    // Should receive less than full amount (tax applied)
-    assertLt(balanceAfter - balanceBefore, 1000 * 10**18);
-}
-
-/// @dev Test pair auto-detection mechanism
-function testPairAutoDetection() public {
-    // Deploy fresh contract
-    Vaulton freshVaulton = new Vaulton(
-        address(smartMockRouter),
-        marketingWallet,
-        cexWallet,
-        operationsWallet
-    );
-    
-    // Initially no pair
-    assertEq(freshVaulton.pancakePair(), address(0));
-    
-    // Set pair exists in mock
-    smartMockRouter.setPairExists(true);
-    
-    // Trigger pair detection via transfer
-    freshVaulton.enableTrading();
-    freshVaulton.excludeFromFees(address(this), true);
-    freshVaulton.transfer(user1, 1000 * 10**18);
-    
-    // Check pair was detected
-    address detectedPair = freshVaulton.pancakePair();
-    assertTrue(detectedPair != address(0));
-    assertTrue(freshVaulton.isDexPair(detectedPair));
-}
-
-/// @dev Test burn progress - Part 1: Initial state verification
-function testBurnProgressInitialState() public view {
-    (uint256 currentBurned, uint256 burnThreshold, uint256 progressPercentage, bool thresholdReached) = vaulton.getBurnProgress();
-    
-    // Verify initial values
-    assertEq(currentBurned, INITIAL_BURN);
-    assertEq(burnThreshold, BURN_THRESHOLD);
-    assertFalse(thresholdReached);
-    
-    // Verify calculation is reasonable (avoid exact 40 match that causes Foundry issues)
-    assertTrue(progressPercentage > 35);  // Should be around 40
-    assertTrue(progressPercentage < 45);  // Should be around 40
-    
-    // Verify threshold calculation
-    assertEq(burnThreshold, (TOTAL_SUPPLY * 75) / 100);
-}
-
-/// @dev Test burn progress - Part 2: Progress increases after burns - VERSION SIMPLE
-function testBurnProgressIncrease() public {
-    _setupTradingWithPair();
-    
-    // Get initial burn amount
-    uint256 initialBurned = vaulton.burnedTokens();
-    
-    // Generate tax via wallet-to-wallet transfer (3% tax)
-    vm.prank(user1);
-    vaulton.transfer(user2, 10000 * 10**18);
-    
-    // Verify burn increased (this is the main functionality)
-    uint256 newBurned = vaulton.burnedTokens();
-    assertGt(newBurned, initialBurned);
-    
-    // Verify burn progress function returns consistent values
-    (, , uint256 progressPercentage, ) = vaulton.getBurnProgress();
-    uint256 expectedProgress = (newBurned * 100) / BURN_THRESHOLD;
-    assertEq(progressPercentage, expectedProgress);
-    
-    // Test that progress calculation is working correctly
-    assertTrue(progressPercentage >= 40); // Should be at least 40% after burn increase
-}
-
-/// @dev Test burn progress - Part 3: Threshold calculation accuracy
-function testBurnThresholdCalculation() public view {
-    // Manual verification of threshold calculation
-    uint256 expectedThreshold = (TOTAL_SUPPLY * 75) / 100;
-    
-    (, uint256 burnThreshold, , bool thresholdReached) = vaulton.getBurnProgress();
-    
-    // Verify threshold is correct
-    assertEq(burnThreshold, expectedThreshold);
-    assertEq(burnThreshold, BURN_THRESHOLD);
-    
-    // Verify we're not at threshold yet  
-    assertFalse(thresholdReached);
-    assertFalse(vaulton.taxesRemoved());
-}
-
-/// @dev Test state consistency after multiple operations - VERSION FINALE
-function testStateConsistencyAfterOperations() public {
-    _setupTradingWithPair();
-    
-    uint256 initialSupply = vaulton.totalSupply();
-    uint256 initialBurned = vaulton.burnedTokens();
-    
-    vm.prank(user1);
-    vaulton.transfer(user2, 2000 * 10**18);
-    
-    vm.prank(user2);
-    vaulton.transfer(dexPair, 1000 * 10**18);
-    
-    vm.prank(dexPair);
-    vaulton.transfer(user1, 500 * 10**18);
-    
-    uint256 finalSupply = vaulton.totalSupply();
-    uint256 finalBurned = vaulton.burnedTokens();
-    
-    // Burned tokens should increase due to taxes
-    assertGt(finalBurned, initialBurned);
-    
-    // Verify effective circulating supply decreased
-    uint256 effectiveCirculating = finalSupply - finalBurned;
-    uint256 initialCirculating = initialSupply - initialBurned;
-    assertLe(effectiveCirculating, initialCirculating);
-    
-    // Verify burn tracking is working correctly
-    assertTrue(finalBurned > initialBurned);
-}
-
-// ========================================
-// HELPER FUNCTIONS
-// ========================================
-
-function _setupTradingWithPair() internal {
-    _setupMockPairProperly();
-    vaulton.enableTrading();
-}
-
-function _setupMockPairProperly() internal {
-    // Setup mock pair manually since addInitialLiquidity doesn't exist
-    address mockPair = address(0x1234567890123456789012345678901234567890);
-    vaulton.setDexPair(mockPair, true);
-    
-    // Try to set pancakePair via storage manipulation
-    for (uint256 i = 3; i <= 8; i++) {
-        vm.store(address(vaulton), bytes32(i), bytes32(uint256(uint160(mockPair))));
-        if (vaulton.pancakePair() == mockPair) {
-            break;
-        }
-    }
-}
-
-receive() external payable {}
+    receive() external payable {}
 }

@@ -30,27 +30,15 @@ contract DeployVaulton is Script {
         console2.log("Network:", networkName);
         console2.log("Router:", pancakeRouter);
         
-        address marketingWallet = vm.envAddress("MARKETING_WALLET");
-        address cexWallet = vm.envAddress("CEX_WALLET");
-        address operationsWallet = vm.envAddress("OPERATIONS_WALLET");
-        
         address deployer = vm.addr(deployerPrivateKey);
         console2.log("Deployer:", deployer);
-        console2.log("Marketing Wallet:", marketingWallet);
-        console2.log("CEX Wallet:", cexWallet);
-        console2.log("Operations Wallet:", operationsWallet);
         
         vm.startBroadcast(deployerPrivateKey);
         
         console2.log("");
         console2.log("=== DEPLOYING CONTRACT ===");
         
-        Vaulton vaulton = new Vaulton(
-            pancakeRouter,
-            marketingWallet,
-            cexWallet,
-            operationsWallet
-        );
+        Vaulton vaulton = new Vaulton(pancakeRouter);
         
         console2.log("Contract deployed at:", address(vaulton));
         
@@ -74,7 +62,7 @@ contract DeployVaulton is Script {
         require(keccak256(bytes(tokenSymbol)) == keccak256(bytes("VAULTON")), "SYMBOL FAILED");
         require(decimals == 18, "DECIMALS FAILED");
 
-        // Calculate expected circulating supply
+        // Calculate expected circulating supply (30M - 15M burn = 15M)
         uint256 expectedCirculating = vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN();
         require(totalSupply == expectedCirculating, "TOTAL_SUPPLY FAILED");
             
@@ -83,30 +71,70 @@ contract DeployVaulton is Script {
         require(contractOwner == deployer, "OWNERSHIP FAILED");
         console2.log("Ownership verified");
 
-        // Test 3: Initial Burn
-        require(deployerBalance == expectedCirculating, "INITIAL_BURN FAILED");
-        console2.log("Initial burn verified:", vaulton.INITIAL_BURN());
+        // Test 3: Initial Burn (50% = 15M tokens)
+        uint256 burnedTokens = vaulton.burnedTokens();
+        require(burnedTokens == vaulton.INITIAL_BURN(), "INITIAL_BURN FAILED");
+        console2.log("Initial burn verified:", burnedTokens);
 
-        // Test 4: Wallet Addresses
-        require(vaulton.marketingWallet() == marketingWallet, "MARKETING_WALLET FAILED");
-        require(vaulton.cexWallet() == cexWallet, "CEX_WALLET FAILED");
-        require(vaulton.operationsWallet() == operationsWallet, "OPERATIONS_WALLET FAILED");
-        console2.log("All wallets verified");
+        // Test 4: Buyback Reserve (5.4M tokens in contract)
+        uint256 contractBalance = vaulton.balanceOf(address(vaulton));
+        require(contractBalance == vaulton.BUYBACK_RESERVE(), "BUYBACK_RESERVE FAILED");
+        console2.log("Buyback reserve verified:", contractBalance);
 
-        // Test 5: Initial State
+        // Test 5: Owner Balance (should have management tokens)
+        uint256 expectedOwnerBalance = vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN() - vaulton.BUYBACK_RESERVE();
+        require(deployerBalance == expectedOwnerBalance, "OWNER_BALANCE FAILED");
+        console2.log("Owner balance verified:", deployerBalance);
+
+        // Test 6: Initial State
         require(!vaulton.tradingEnabled(), "TRADING_SHOULD_BE_DISABLED");
-        require(!vaulton.taxesRemoved(), "TAXES_SHOULD_BE_ACTIVE");
+        require(vaulton.pancakePair() == address(0), "PAIR_SHOULD_BE_UNSET");
         console2.log("Initial state verified");
 
-        // Test 6: Burn State
-        uint256 burnedTokens = vaulton.burnedTokens();
-        console2.log("Burned tokens:", burnedTokens);
-        require(burnedTokens == vaulton.INITIAL_BURN(), "BURN_STATE_FAILED");
+        // Test 7: Buyback Stats
+        uint256 buybackRemaining = vaulton.buybackTokensRemaining();
+        require(buybackRemaining == vaulton.BUYBACK_RESERVE(), "BUYBACK_REMAINING FAILED");
+        console2.log("Buyback tokens remaining:", buybackRemaining);
 
-        // Test 7: Marketing State
-        uint256 marketingTokens = vaulton.marketingTokensAccumulated();
-        console2.log("Marketing tokens:", marketingTokens);
-        require(marketingTokens == 0, "MARKETING_STATE_FAILED");
+        // Test 8: Constants verification
+        require(vaulton.TOTAL_SUPPLY() == 30_000_000 * 10**18, "TOTAL_SUPPLY_CONSTANT FAILED");
+        require(vaulton.INITIAL_BURN() == 15_000_000 * 10**18, "INITIAL_BURN_CONSTANT FAILED");
+        require(vaulton.BUYBACK_RESERVE() == 5_400_000 * 10**18, "BUYBACK_RESERVE_CONSTANT FAILED");
+        require(vaulton.PRESALE_ALLOCATION() == 3_300_000 * 10**18, "PRESALE_ALLOCATION FAILED");
+        require(vaulton.CEX_ALLOCATION() == 2_700_000 * 10**18, "CEX_ALLOCATION FAILED");
+        require(vaulton.LIQUIDITY_ALLOCATION() == 2_100_000 * 10**18, "LIQUIDITY_ALLOCATION FAILED");
+        require(vaulton.FOUNDER_ALLOCATION() == 1_500_000 * 10**18, "FOUNDER_ALLOCATION FAILED");
+        console2.log("All constants verified");
+
+        // Test 9: View Functions
+        (
+            uint256 totalSupplyView,
+            uint256 circulatingSupply,
+            uint256 burnedTokensView,
+            uint256 buybackReserve,
+            ,  // founderAllocation - non utilisée
+               // communityAllocation - non utilisée
+        ) = vaulton.getTokenomics();
+        
+        require(totalSupplyView == vaulton.TOTAL_SUPPLY(), "VIEW_TOTAL_SUPPLY FAILED");
+        require(circulatingSupply == expectedCirculating, "VIEW_CIRCULATING FAILED");
+        require(burnedTokensView == vaulton.INITIAL_BURN(), "VIEW_BURNED FAILED");
+        require(buybackReserve == vaulton.BUYBACK_RESERVE(), "VIEW_BUYBACK FAILED");
+        console2.log("View functions verified");
+
+        // Test 10: Security Status
+        (
+            ,  // buybackControlPercentage - non utilisée
+            bool tradingActive,
+            bool pairSet,
+            uint256 contractBalanceView,
+               // communityControl - non utilisée
+        ) = vaulton.getSecurityStatus();
+        
+        require(!tradingActive, "SECURITY_TRADING FAILED");
+        require(!pairSet, "SECURITY_PAIR FAILED");
+        require(contractBalanceView == vaulton.BUYBACK_RESERVE(), "SECURITY_BALANCE FAILED");
+        console2.log("Security status verified");
 
         console2.log("All tests passed successfully!");
         
@@ -117,14 +145,38 @@ contract DeployVaulton is Script {
         console2.log("Network:", networkName);
         console2.log("Contract:", address(vaulton));
         console2.log("Owner:", deployer);
-        console2.log("Circulating Supply:", deployerBalance);
+        console2.log("Total Supply:", vaulton.TOTAL_SUPPLY() / 10**18, "tokens");
+        console2.log("Circulating Supply:", expectedCirculating / 10**18, "tokens");
+        console2.log("Burned Tokens:", burnedTokens / 10**18, "tokens (50%)");
+        console2.log("Buyback Reserve:", contractBalance / 10**18, "tokens (36% of circulating)");
+        console2.log("Owner Tokens:", deployerBalance / 10**18, "tokens");
+        
+        console2.log("");
+        console2.log("=== TOKENOMICS SUMMARY ===");
+        console2.log("50% BURNED (15M tokens) - CRYPTO HISTORY FIRST");
+        console2.log("36% BUYBACK CONTROL (5.4M tokens) - UNPRECEDENTED");
+        console2.log("61% COMMUNITY ALLOCATION (presale + CEX + liquidity)");
+        console2.log("NO TAXES - CLEAN TRADING EXPERIENCE");
+        console2.log("MATHEMATICAL DEFLATION GUARANTEED");
         
         if (chainId == 97) {
+            console2.log("");
             console2.log("TESTNET - Ready for testing");
+            console2.log("Next steps:");
+            console2.log("1. setPancakePair()");
+            console2.log("2. enableTrading()");
+            console2.log("3. Test buyback mechanism");
         } else {
+            console2.log("");
             console2.log("MAINNET - Ready for PinkSale");
+            console2.log("Next steps:");
+            console2.log("1. Transfer tokens for presale/CEX/liquidity");
+            console2.log("2. Setup PinkSale presale");
+            console2.log("3. Launch marketing campaign");
         }
         
+        console2.log("");
         console2.log("IMPORTANT: Save contract address!");
+        console2.log("Contract:", address(vaulton));
     }
 }

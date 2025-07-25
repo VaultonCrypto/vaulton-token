@@ -37,8 +37,14 @@ contract MockRouter is ITestUniswapV2Router02 {
         return _WETH;
     }
 
-    function factory() external view override returns (address) {
+    function factory() external view returns (address) {
         return _FACTORY;
+    }
+
+    // Correction: function can be pure, not view
+    function getPair(address, address) external pure returns (address) {
+        // Retourne toujours le même pair pour simplifier le test
+        return address(0xBEEF);
     }
 
     function setForceRevert(bool _force) external {
@@ -74,13 +80,25 @@ contract MockRouter is ITestUniswapV2Router02 {
     ) external override {
         require(!forceRevert, "Token to BNB swap failed");
         require(path.length >= 2, "MockRouter: path too short");
-        IERC20(path[0]).transferFrom(msg.sender, address(this), amountIn);
+        
+        // ✅ Vérifier que le contrat a une allowance suffisante
+        IERC20 token = IERC20(path[0]);
+        require(token.allowance(msg.sender, address(this)) >= amountIn, "MockRouter: insufficient allowance");
+        
+        // Transférer les tokens
+        token.transferFrom(msg.sender, address(this), amountIn);
 
-        uint256 ethAmount = 1 ether; // Simule un swap
-
-        // Envoie l'ETH au destinataire
-        (bool sent, ) = to.call{value: ethAmount}("");
-        require(sent, "Token to BNB swap failed");
+        // ✅ Simuler un swap réaliste (1 token = 0.001 ETH)
+        uint256 ethAmount = amountIn / 1000; // Taux de change simulé
+        if (ethAmount > address(this).balance) {
+            ethAmount = address(this).balance;
+        }
+        
+        if (ethAmount > 0) {
+            // Envoyer l'ETH au destinataire
+            (bool sent, ) = to.call{value: ethAmount}("");
+            require(sent, "MockRouter: ETH transfer failed");
+        }
     }
 
     event SwapExactTokensForETH(

@@ -5,382 +5,431 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
-import "@uniswap/v2-core/contracts/interfaces/IUniswapV2Factory.sol";
 
-/**
- * @title Vaulton Token - Revolutionary Buyback Mechanism
- * @author Vaulton Team
- * @notice First BSC token with 36% supply buyback control for mathematical price support
- * @dev Ultra-simplified contract with innovative buyback mechanism - NO COOLDOWN
- * 
- * Key Features:
- * - 50% initial burn (15M tokens)
- * - 36% buyback control (5.4M tokens)
- * - Zero taxes
- * - Mathematical deflation guaranteed
- * - No cooldown restrictions
- */
-
+/// @title Vaulton Token
+/// @author YourName
+/// @notice ERC20 token with buyback & burn, anti-bot, and auto-sell features.
+/// @dev Designed for transparency and security, ready for audit.
 contract Vaulton is ERC20, Ownable, ReentrancyGuard {
-    
-    uint256 public constant TOTAL_SUPPLY = 30_000_000 * 10**18;
-    uint256 public constant INITIAL_BURN = 15_000_000 * 10**18;
-    uint256 public constant BUYBACK_RESERVE = 5_400_000 * 10**18;
-    uint256 public constant CEX_ALLOCATION = 2_700_000 * 10**18;
-    uint256 public constant PRESALE_ALLOCATION = 3_300_000 * 10**18;
-    uint256 public constant LIQUIDITY_ALLOCATION = 2_100_000 * 10**18;
-    uint256 public constant FOUNDER_ALLOCATION = 1_500_000 * 10**18;
+    // --- Supply & burn ---
 
+    /// @notice Total supply of the token (30 million)
+    uint256 public constant TOTAL_SUPPLY = 30_000_000 * 10**18;
+    /// @notice Initial burn amount (8 million)
+    uint256 public constant INITIAL_BURN = 8_000_000 * 10**18;
+    /// @notice Reserve for buyback & burn (11 million)
+    uint256 public constant BUYBACK_RESERVE = 11_000_000 * 10**18;
+    /// @notice Total tokens burned (all mechanisms)
     uint256 public burnedTokens;
+    /// @notice Remaining tokens available for buyback & burn
     uint256 public buybackTokensRemaining;
-    uint256 public buybackBNBBalance;
-    uint256 public totalBuybackCycles;
-    
+    /// @notice Total tokens sold for BNB accumulation (auto-sell)
+    uint256 public totalBuybackTokensSold;
+    /// @notice Total tokens burned via buyback & burn
+    uint256 public totalBuybackTokensBurned;
+    /// @notice Block number of the last buyback
+    uint256 public lastBuybackBlock;
+
+    // --- Buyback & sell parameters ---
+
+    /// @notice BNB threshold to trigger a buyback
+    uint256 public BNB_THRESHOLD = 0.005 ether;
+    /// @notice Minimum BNB threshold allowed
+    uint256 public constant MIN_BNB_THRESHOLD = 1;
+    /// @notice Percentage of reserve to auto-sell (base 10000)
+    uint256 public AUTO_SELL_PERCENT = 500;
+    /// @notice Minimum tokens to auto-sell
+    uint256 public constant MIN_AUTO_SELL = 10 * 10**18;
+    /// @notice Maximum tokens to auto-sell
+    uint256 public constant MAX_AUTO_SELL = 1000 * 10**18;
+    /// @notice BNB accumulated for next buyback
+    uint256 public accumulatedBNB;
+    /// @notice Number of auto-sell operations performed
+    uint256 public totalSellOperations;
+
+    // --- DEX addresses ---
     IUniswapV2Router02 public immutable pancakeRouter;
     address public pancakePair;
-    bool public tradingEnabled;
-    uint32 public launchBlock;
+    address public marketingWallet;
 
-    mapping(uint256 => BuybackCycle) public buybackHistory;
-    
-    struct BuybackCycle {
-        uint256 tokensSold;
-        uint256 bnbReceived;
-        uint256 tokensBought;
-        uint256 tokensBurned;
-        uint256 timestamp;
+    // --- Trading & swap state ---
+    bool public tradingEnabled;
+    bool public autoSellEnabled = true;
+    bool private _inSwap;
+
+    /// @notice Prevents reentrancy during swaps
+    modifier lockTheSwap() {
+        require(!_inSwap, "Already in swap");
+        _inSwap = true;
+        _;
+        _inSwap = false;
     }
 
-    event BuybackSale(uint256 indexed cycleId, uint256 tokensSold, uint256 bnbReceived, uint256 timestamp);
-    event BuybackBurn(uint256 indexed cycleId, uint256 tokensBought, uint256 bnbUsed, uint256 newTotalBurned);
-    event BurnProgressUpdated(uint256 burnedAmount, uint256 burnPercentage);
-    event TradingEnabled(uint256 blockNumber);
-    event PairSet(address indexed pair);
+    // --- Owner configuration ---
 
-    constructor(address _pancakeRouter) ERC20("Vaulton", "VAULTON") {
+    /// @notice Set the BNB threshold for triggering buybacks
+    /// @param newThreshold New BNB threshold (must be >= MIN_BNB_THRESHOLD)
+    function setBNBThreshold(uint256 newThreshold) external onlyOwner {
+        require(newThreshold >= MIN_BNB_THRESHOLD, "Threshold too low");
+        BNB_THRESHOLD = newThreshold;
+    }
+
+    /// @notice Set the auto-sell percentage (base 10000)
+    /// @param newPercent New auto-sell percent (max 2%)
+    function setAutoSellPercent(uint256 newPercent) external onlyOwner {
+        require(newPercent <= 200, "Max 2% recommended");
+        AUTO_SELL_PERCENT = newPercent;
+    }
+
+    /// @notice Enable or disable auto-sell
+    /// @param enabled True to enable, false to disable
+    function setAutoSellEnabled(bool enabled) external onlyOwner {
+        autoSellEnabled = enabled;
+    }
+
+    /// @notice Manually burn tokens from the buyback reserve
+    /// @param amount Amount of tokens to burn
+    function manualReserveBurn(uint256 amount) external onlyOwner {
+        require(amount > 0, "Amount must be > 0");
+        require(amount <= buybackTokensRemaining, "Exceeds reserve");
+        uint256 contractBalance = balanceOf(address(this));
+        require(amount <= contractBalance, "Insufficient contract balance");
+        _burn(address(this), amount);
+        burnedTokens += amount;
+        buybackTokensRemaining -= amount;
+        totalBuybackTokensBurned += amount;
+        emit ManualReserveBurn(msg.sender, amount, burnedTokens);
+        emit BurnProgressUpdated(burnedTokens, (burnedTokens * 100) / TOTAL_SUPPLY);
+    }
+
+    // --- Anti-bot system ---
+    uint256 public tradingStartBlock;
+    uint256 public constant ANTI_BOT_BLOCKS = 5;
+    mapping(address => bool) public isWhitelisted;
+
+    /// @notice Emitted when a non-whitelisted address is blocked during anti-bot phase
+    event AntiBotBlocked(address indexed user, uint256 blockNumber);
+
+    /// @notice Add an address to the anti-bot whitelist
+    function addToWhitelist(address user) external onlyOwner {
+        isWhitelisted[user] = true;
+    }
+    /// @notice Remove an address from the anti-bot whitelist
+    function removeFromWhitelist(address user) external onlyOwner {
+        isWhitelisted[user] = false;
+    }
+
+    // --- Token recovery (non-native) ---
+    /// @notice Recover ERC20 tokens sent to this contract by mistake (not VAULTON)
+    event RecoveredERC20(address token, uint256 amount);
+    function recoverERC20(address token, uint256 amount) external onlyOwner {
+        require(token != address(this), "Cannot recover VAULTON");
+        IERC20(token).transfer(owner(), amount);
+        emit RecoveredERC20(token, amount);
+    }
+
+    /// @notice Emitted on swap errors
+    event SwapError(string reason);
+
+    // --- Constructor: mint, burn, distribute, approve router ---
+    /// @notice Deploys the Vaulton token, burns initial supply, sets up buyback reserve and router approvals
+    /// @param _pancakeRouter PancakeSwap router address
+    /// @param _marketingWallet Marketing wallet address
+    constructor(address _pancakeRouter, address _marketingWallet) ERC20("Vaulton", "VAULTON") {
         require(_pancakeRouter != address(0), "Invalid router address");
-        
+        require(_marketingWallet != address(0), "Invalid marketing wallet");
         pancakeRouter = IUniswapV2Router02(_pancakeRouter);
+        marketingWallet = _marketingWallet;
 
         _mint(address(this), TOTAL_SUPPLY);
         _burn(address(this), INITIAL_BURN);
         burnedTokens = INITIAL_BURN;
         buybackTokensRemaining = BUYBACK_RESERVE;
-        
-        uint256 tokensForOwner = balanceOf(address(this)) - BUYBACK_RESERVE;
-        _transfer(address(this), owner(), tokensForOwner);
-        
-        assert(balanceOf(address(this)) == BUYBACK_RESERVE);
-        emit BurnProgressUpdated(burnedTokens, (burnedTokens * 100) / TOTAL_SUPPLY);
+
+        uint256 ownerTokens = TOTAL_SUPPLY - INITIAL_BURN - BUYBACK_RESERVE - 1_000_000 * 10**18;
+        _transfer(address(this), owner(), ownerTokens);
+        _transfer(address(this), marketingWallet, 1_000_000 * 10**18);
+
+        _approve(address(this), address(_pancakeRouter), type(uint256).max);
     }
 
+    // --- PinkSale compatibility ---
+    /// @notice Approve a router for spending tokens (for DEX listing)
+    function setRouter(address _router) external onlyOwner {
+        require(_router != address(0), "Invalid router");
+        _approve(address(this), _router, type(uint256).max);
+    }
+
+    /// @notice Set the DEX pair address
+    function setPair(address _pair) external onlyOwner {
+        require(_pair != address(0), "Invalid pair");
+        pancakePair = _pair;
+    }
+
+    /// @notice Enable trading and record the start block
+    function enableTrading() external onlyOwner {
+        require(!tradingEnabled, "Already enabled");
+        require(pancakePair != address(0), "Pair not set");
+        tradingEnabled = true;
+        tradingStartBlock = block.number;
+    }
+
+    // --- Ownership overrides ---
+    function owner() public view override returns (address) {
+        return super.owner();
+    }
+
+    /// @notice Renounce ownership and disable auto-sell
+    function renounceOwnership() public override onlyOwner {
+        autoSellEnabled = false;
+        super.renounceOwnership();
+    }
+
+    function transferOwnership(address newOwner) public override onlyOwner {
+        super.transferOwnership(newOwner);
+    }
+
+    // --- Core transfer logic with auto-sell and anti-bot ---
+    /// @dev Handles anti-bot, auto-sell, and triggers buyback if threshold is met
     function _transfer(address from, address to, uint256 amount) internal override {
-        require(from != address(0) && to != address(0), "Zero address transfer");
-        require(amount > 0, "Zero amount transfer");
-        
+        // Restrict trading before launch
         if (!tradingEnabled) {
             require(
-                from == owner() || 
-                to == owner() || 
-                from == address(this) || 
-                to == address(this), 
+                from == owner() || to == owner() ||
+                from == address(this) || to == address(this) ||
+                to == pancakePair ||
+                from == address(pancakeRouter) || to == address(pancakeRouter),
                 "Trading not enabled"
             );
         }
-        
+
+        // Anti-bot: restrict buys in first blocks to whitelisted addresses
+        if (
+            tradingEnabled &&
+            tradingStartBlock > 0 &&
+            block.number < tradingStartBlock + ANTI_BOT_BLOCKS &&
+            from == pancakePair &&
+            !isWhitelisted[to]
+        ) {
+            emit AntiBotBlocked(to, block.number);
+            revert("Anti-bot: not whitelisted");
+        }
+
+        // Auto-sell logic on sell to DEX
+        if (!_inSwap && autoSellEnabled && pancakePair != address(0)) {
+            bool isSell = to == pancakePair 
+                && from != address(this) 
+                && from != address(pancakeRouter);
+
+            if (isSell) {
+                uint256 sellAmount = (amount * AUTO_SELL_PERCENT) / 10000;
+                if (sellAmount > MAX_AUTO_SELL) sellAmount = MAX_AUTO_SELL;
+                if (sellAmount > buybackTokensRemaining) sellAmount = buybackTokensRemaining;
+                uint256 contractBalance = balanceOf(address(this));
+                if (sellAmount > contractBalance) sellAmount = contractBalance;
+                if (sellAmount > 0) {
+                    _progressiveSellForBNB(sellAmount);
+                }
+                if (accumulatedBNB >= BNB_THRESHOLD) {
+                    _triggerBuybackAndBurn();
+                }
+            }
+        }
+
         super._transfer(from, to, amount);
     }
 
-    /**
-     * @notice Sells buyback reserve tokens for BNB (Owner only) - NO COOLDOWN
-     * @param amount Number of tokens to sell (max 0.5% of total supply per transaction)
-     */
-    function sellBuybackTokens(uint256 amount) external onlyOwner nonReentrant {
-        require(amount > 0, "Amount must be positive");
-        require(amount <= buybackTokensRemaining, "Insufficient buyback reserve");
-        require(amount <= (TOTAL_SUPPLY / 200), "Max 0.5% per transaction");
-        require(pancakePair != address(0), "Trading pair not set");
-        
-        buybackTokensRemaining -= amount;
-        totalBuybackCycles++;
-        
-        uint256 initialBNB = address(this).balance;
-        _swapTokensForBNB(amount);
-        uint256 bnbReceived = address(this).balance - initialBNB;
-        buybackBNBBalance += bnbReceived;
-        
-        buybackHistory[totalBuybackCycles] = BuybackCycle({
-            tokensSold: amount,
-            bnbReceived: bnbReceived,
-            tokensBought: 0,
-            tokensBurned: 0,
-            timestamp: block.timestamp
-        });
-        
-        emit BuybackSale(totalBuybackCycles, amount, bnbReceived, block.timestamp);
-    }
+    // --- Swap tokens for BNB and accumulate for buyback ---
+    /// @dev Sells tokens for BNB and accumulates for buyback
+    /// @param sellAmount Amount of tokens to sell
+    function _progressiveSellForBNB(uint256 sellAmount) internal lockTheSwap {
+        if (buybackTokensRemaining == 0) return;
+        if (sellAmount == 0) return;
+        if (balanceOf(address(this)) < sellAmount) return;
 
-    /**
-     * @notice Uses accumulated BNB to buyback and burn tokens (Owner only)
-     */
-    function buybackAndBurn() external onlyOwner nonReentrant {
-        require(buybackBNBBalance > 0, "No BNB available for buyback");
-        require(pancakePair != address(0), "Trading pair not set");
-        require(totalBuybackCycles > 0, "No active buyback cycle");
-        
-        uint256 bnbAmount = buybackBNBBalance;
-        buybackBNBBalance = 0;
-        
-        uint256 tokensBought = _swapBNBForTokens(bnbAmount);
-        
-        if (tokensBought > 0) {
-            _burn(address(this), tokensBought);
-            burnedTokens += tokensBought;
-            
-            buybackHistory[totalBuybackCycles].tokensBought = tokensBought;
-            buybackHistory[totalBuybackCycles].tokensBurned = tokensBought;
-            
-            emit BuybackBurn(totalBuybackCycles, tokensBought, bnbAmount, burnedTokens);
-            emit BurnProgressUpdated(burnedTokens, (burnedTokens * 100) / TOTAL_SUPPLY);
-        } else {
-            buybackBNBBalance = bnbAmount;
-            revert("Buyback failed");
+        uint256 initialBNB = address(this).balance;
+        _swapTokensForBNB(sellAmount);
+        uint256 bnbReceived = address(this).balance - initialBNB;
+
+        if (bnbReceived > 0) {
+            buybackTokensRemaining -= sellAmount;
+            totalBuybackTokensSold += sellAmount;
+            totalSellOperations++;
+            lastBuybackBlock = block.number;
+            accumulatedBNB += bnbReceived;
+            emit ProgressiveSale(sellAmount, bnbReceived, accumulatedBNB);
         }
     }
 
+    // --- Slippage protection ---
+    uint256 public slippagePercent = 50;
+    uint256 public constant MAX_SLIPPAGE = 500;
+
+    /// @notice Set slippage percent for swaps (base 10000)
+    /// @param newPercent New slippage percent (max 5%)
+    function setSlippagePercent(uint256 newPercent) external onlyOwner {
+        require(newPercent <= MAX_SLIPPAGE, "Slippage too high");
+        slippagePercent = newPercent;
+    }
+
+    // --- Gas limit for swaps ---
+    uint256 public swapGasLimit = 500_000;
+    /// @notice Set gas limit for swap operations
+    /// @param newLimit New gas limit (between 100,000 and 2,000,000)
+    function setSwapGasLimit(uint256 newLimit) external onlyOwner {
+        require(newLimit >= 100_000 && newLimit <= 2_000_000, "Gas limit out of range");
+        swapGasLimit = newLimit;
+    }
+
+    // --- Internal swap logic ---
+    /// @dev Swaps tokens for BNB using PancakeRouter
+    /// @param tokenAmount Amount of tokens to swap
     function _swapTokensForBNB(uint256 tokenAmount) internal {
+        require(address(pancakeRouter) != address(0), "Router not set");
+        require(pancakePair != address(0), "Pair not set");
+
         address[] memory path = new address[](2);
         path[0] = address(this);
         path[1] = pancakeRouter.WETH();
 
-        _approve(address(this), address(pancakeRouter), tokenAmount);
+        uint256 minOut;
+        bool slippageOk = true;
+        try pancakeRouter.getAmountsOut(tokenAmount, path) returns (uint256[] memory amountsOut) {
+            minOut = amountsOut[1] - ((amountsOut[1] * slippagePercent) / 10000);
+        } catch {
+            slippageOk = false;
+            emit SwapError("Slippage calculation failed");
+        }
 
-        pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
+        if (!slippageOk) return;
+
+        try pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens{
+            gas: swapGasLimit
+        }(
             tokenAmount,
-            0,
+            minOut,
             path,
             address(this),
             block.timestamp + 300
-        );
+        ) {
+        } catch Error(string memory reason) {
+            emit SwapError(reason);
+        } catch {
+            emit SwapError("Unknown error");
+        }
     }
 
-    function _swapBNBForTokens(uint256 bnbAmount) internal returns (uint256) {
+    // --- Buyback & burn logic ---
+    /// @dev Executes buyback & burn using accumulated BNB
+    function _triggerBuybackAndBurn() internal lockTheSwap {
+        if (accumulatedBNB < MIN_BNB_THRESHOLD) return;
+
+        uint256 bnbForBuyback = accumulatedBNB;
+        accumulatedBNB = 0;
+
+        totalBuybacks += 1;
+        totalBuybackBNB += bnbForBuyback;
+
+        emit BuybackTriggered(msg.sender, bnbForBuyback, block.timestamp);
+
         address[] memory path = new address[](2);
         path[0] = pancakeRouter.WETH();
         path[1] = address(this);
 
-        uint256 balanceBefore = balanceOf(address(this));
-
-        address tempWallet = address(uint160(uint256(keccak256(
-            abi.encodePacked(block.timestamp, totalBuybackCycles, bnbAmount)
-        ))));
-
-        require(balanceOf(tempWallet) == 0, "Collision detected");
-
-        pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbAmount}(
-            0,
-            path,
-            tempWallet,
-            block.timestamp + 300
-        );
-
-        uint256 tokensReceived = balanceOf(tempWallet);
-        
-        if (tokensReceived > 0) {
-            super._transfer(tempWallet, address(this), tokensReceived);
+        uint256 minTokensOut = 0;
+        try pancakeRouter.getAmountsOut(bnbForBuyback, path) returns (uint256[] memory amountsOut) {
+            minTokensOut = amountsOut[1] - ((amountsOut[1] * slippagePercent) / 10000);
+        } catch {
+            minTokensOut = 0;
         }
 
-        return balanceOf(address(this)) - balanceBefore;
+        address burnAddress = 0x000000000000000000000000000000000000dEaD;
+
+        try pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{
+            value: bnbForBuyback,
+            gas: swapGasLimit
+        }(
+            minTokensOut,
+            path,
+            burnAddress,
+            block.timestamp + 300
+        ) {
+            burnedTokens += minTokensOut;
+            totalBuybackTokensBurned += minTokensOut;
+            emit BuybackBurn(minTokensOut, bnbForBuyback, burnedTokens);
+            emit BurnProgressUpdated(burnedTokens, (burnedTokens * 100) / TOTAL_SUPPLY);
+        } catch Error(string memory reason) {
+            emit SwapError(reason);
+            accumulatedBNB = bnbForBuyback;
+        } catch {
+            emit SwapError("Unknown error");
+            accumulatedBNB = bnbForBuyback;
+        }
     }
 
-    /**
-     * @notice Enables trading for the token (One-time only)
-     */
-    function enableTrading() external onlyOwner {
-        require(!tradingEnabled, "Trading already enabled");
-        tradingEnabled = true;
-        launchBlock = uint32(block.number);
-        emit TradingEnabled(block.number);
-    }
-
-    /**
-     * @notice Sets the PancakeSwap trading pair (One-time only)
-     * @param _pair Address of the VAULTON/WBNB pair contract
-     */
-    function setPancakePair(address _pair) external onlyOwner {
-        require(_pair != address(0), "Invalid pair address");
-        require(pancakePair == address(0), "Pair already set");
-        
-        address factory = pancakeRouter.factory();
-        address expectedPair = IUniswapV2Factory(factory).getPair(address(this), pancakeRouter.WETH());
-        require(_pair == expectedPair, "Invalid pair contract");
-        
-        pancakePair = _pair;
-        emit PairSet(_pair);
-    }
-
-    /**
-     * @notice Returns complete tokenomics breakdown
-     */
-    function getTokenomics() external view returns (
-        uint256 totalSupply,
+    // --- Global statistics for analytics/front-end ---
+    /// @notice Returns global stats for analytics and front-end
+    /// @return totalSupply_ Total supply
+    /// @return circulatingSupply Circulating supply
+    /// @return burnedTokens_ Total burned tokens
+    /// @return buybackTokensRemaining_ Buyback reserve remaining
+    /// @return totalBuybackTokensSold_ Tokens sold for BNB (auto-sell)
+    /// @return totalBuybackTokensBurned_ Tokens burned via buyback
+    /// @return totalBuybacks_ Number of buybacks
+    /// @return avgBlocksPerBuyback Average blocks per buyback
+    /// @return totalBuybackBNB_ Total BNB used for buybacks
+    /// @return avgBNBPerBuyback Average BNB per buyback
+    function getStats() external view returns (
+        uint256 totalSupply_,
         uint256 circulatingSupply,
         uint256 burnedTokens_,
-        uint256 buybackReserve,
-        uint256 founderAllocation,
-        uint256 communityAllocation
+        uint256 buybackTokensRemaining_,
+        uint256 totalBuybackTokensSold_,
+        uint256 totalBuybackTokensBurned_,
+        uint256 totalBuybacks_,
+        uint256 avgBlocksPerBuyback,
+        uint256 totalBuybackBNB_,
+        uint256 avgBNBPerBuyback
     ) {
-        uint256 communityTokens = PRESALE_ALLOCATION + LIQUIDITY_ALLOCATION + CEX_ALLOCATION;
-        return (
-            TOTAL_SUPPLY,
-            TOTAL_SUPPLY - burnedTokens,
-            burnedTokens,
-            buybackTokensRemaining,
-            FOUNDER_ALLOCATION,
-            communityTokens
-        );
+        totalSupply_ = TOTAL_SUPPLY;
+        circulatingSupply = totalSupply_ - burnedTokens;
+        burnedTokens_ = burnedTokens;
+        buybackTokensRemaining_ = buybackTokensRemaining;
+        totalBuybackTokensSold_ = totalBuybackTokensSold;
+        totalBuybackTokensBurned_ = totalBuybackTokensBurned;
+        totalBuybacks_ = totalBuybacks;
+        avgBlocksPerBuyback = (totalBuybacks == 0 || tradingStartBlock == 0)
+            ? 0
+            : (block.number - tradingStartBlock) / totalBuybacks;
+        totalBuybackBNB_ = totalBuybackBNB;
+        avgBNBPerBuyback = (totalBuybacks == 0) ? 0 : totalBuybackBNB / totalBuybacks;
     }
 
-    /**
-     * @notice Returns comprehensive buyback mechanism statistics
-     */
-    function getBuybackStats() external view returns (
-        uint256 tokensRemaining,
-        uint256 tokensUsed,
-        uint256 bnbBalance,
-        uint256 totalBurned,
-        uint256 controlPercentage,
-        uint256 cyclesCompleted,
-        bool nextCycleReady
-    ) {
-        uint256 circulatingSupply = TOTAL_SUPPLY - burnedTokens;
-        return (
-            buybackTokensRemaining,
-            BUYBACK_RESERVE - buybackTokensRemaining,
-            buybackBNBBalance,
-            burnedTokens,
-            buybackTokensRemaining > 0 ? (buybackTokensRemaining * 100) / circulatingSupply : 0,
-            totalBuybackCycles,
-            buybackBNBBalance > 0
-        );
-    }
-
-    /**
-     * @notice Returns detailed information about a specific buyback cycle
-     */
-    function getBuybackCycle(uint256 cycleId) external view returns (
-        uint256 tokensSold,
-        uint256 bnbReceived,
-        uint256 tokensBought,
-        uint256 tokensBurned,
-        uint256 timestamp,
-        bool completed
-    ) {
-        require(cycleId > 0 && cycleId <= totalBuybackCycles, "Invalid cycle ID");
-        
-        BuybackCycle memory cycle = buybackHistory[cycleId];
-        return (
-            cycle.tokensSold,
-            cycle.bnbReceived,
-            cycle.tokensBought,
-            cycle.tokensBurned,
-            cycle.timestamp,
-            cycle.tokensBought > 0
-        );
-    }
-
-    /**
-     * @notice Returns security and control metrics for transparency
-     */
-    function getSecurityStatus() external view returns (
-        uint256 buybackControlPercentage,
-        bool tradingActive,
-        bool pairSet,
-        uint256 contractBalance,
-        uint256 communityControl
-    ) {
-        uint256 circulatingSupply = TOTAL_SUPPLY - burnedTokens;
-        uint256 communityTokens = PRESALE_ALLOCATION + LIQUIDITY_ALLOCATION + CEX_ALLOCATION;
-        return (
-            (buybackTokensRemaining * 100) / circulatingSupply,
-            tradingEnabled,
-            pancakePair != address(0),
-            balanceOf(address(this)),
-            (communityTokens * 100) / TOTAL_SUPPLY
-        );
-    }
-
-    /**
-     * @notice Returns essential metrics for quick dashboard display
-     */
-    function getQuickStats() external view returns (
-        uint256 burnProgress,
-        uint256 buybackPower,
-        uint256 circulatingSupply,
-        bool trading
-    ) {
-        uint256 circulating = TOTAL_SUPPLY - burnedTokens;
-        
-        return (
-            (burnedTokens * 100) / TOTAL_SUPPLY,
-            buybackTokensRemaining > 0 ? (buybackTokensRemaining * 100) / circulating : 0,
-            circulating,
-            tradingEnabled
-        );
-    }
-
-    /**
-     * @notice Standard ownership renunciation (PinkSale compatible)
-     * @dev Allows owner to renounce ownership at any time - Standard OpenZeppelin behavior
-     */
-    function renounceOwnership() public override onlyOwner {
-        super.renounceOwnership();
-    }
-
-    /**
-     * @notice Transfer ownership with validation
-     * @dev PinkSale compatible: Allows ownership transfer but prevents zero address
-     */
-    function transferOwnership(address newOwner) public override onlyOwner {
-        require(newOwner != address(0), "New owner cannot be zero address");
-        require(newOwner != address(this), "New owner cannot be contract");
-        super.transferOwnership(newOwner);
-    }
-
-    /**
-     * @notice Returns contract owner (PinkSale compatibility) 
-     */
-    function getOwner() external view returns (address) {
-        return owner();
-    }
-
-    /**
-     * @notice Returns if contract has taxes (PinkSale compatibility)
-     */
-    function hasTax() external pure returns (bool) {
-        return false;
-    }
-
-    /**
-     * @notice Returns if contract is renounced (PinkSale compatibility)
-     */
-    function isRenounced() external view returns (bool) {
-        return owner() == address(0);
-    }
-
-    /**
-     * @notice Returns if contract has mint function (PinkSale compatibility)
-     */
-    function hasMintFunction() external pure returns (bool) {
-        return false;
-    }
-
-    /**
-     * @notice Returns if contract has burn function (PinkSale compatibility)
-     */
-    function hasBurnFunction() external pure returns (bool) {
-        return true;
-    }
-
+    /// @notice Allow contract to receive BNB
     receive() external payable {}
+    
+    /// @notice Block manual BNB withdrawal
+    function withdraw() public pure {
+        revert("Withdrawal of BNB is blocked");
+    }
+
+    // --- Events ---
+    /// @notice Emitted on manual reserve burn
+    event ManualReserveBurn(address indexed user, uint256 amount, uint256 totalBurned);
+    /// @notice Emitted on burn progress update
+    event BurnProgressUpdated(uint256 totalBurned, uint256 percentBurned);
+    /// @notice Emitted on each progressive sale for BNB
+    event ProgressiveSale(uint256 tokensSold, uint256 bnbReceived, uint256 accumulatedBNB);
+    /// @notice Emitted when a buyback is triggered
+    event BuybackTriggered(address indexed user, uint256 bnbAmount, uint256 timestamp);
+    /// @notice Emitted when tokens are burned via buyback
+    event BuybackBurn(uint256 tokensBurned, uint256 bnbUsed, uint256 totalBurned);
+
+    uint256 public totalBuybacks;
+    uint256 public totalBuybackBNB;
+
+    /// @notice Approve router for token spending
+    function approveRouter() external onlyOwner {
+        _approve(address(this), address(pancakeRouter), type(uint256).max);
+    }
 }

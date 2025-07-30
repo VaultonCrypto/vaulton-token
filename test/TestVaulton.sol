@@ -4,8 +4,8 @@ pragma solidity ^0.8.19;
 import "../src/VaultonToken.sol";
 
 contract TestVaulton is Vaulton {
-    constructor(address router, address marketingWallet)
-        Vaulton(router, marketingWallet)
+    constructor(address router, address marketingWallet, address thirdArg)
+        Vaulton(router, marketingWallet, thirdArg)
     {}
 
     // Remplace la fonction interne pour les tests

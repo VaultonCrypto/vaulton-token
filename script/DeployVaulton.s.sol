@@ -40,6 +40,10 @@ contract DeployVaulton is Script {
         address marketingWallet = vm.envAddress("MARKETING_WALLET");
         console2.log("Marketing wallet:", marketingWallet);
 
+        // Ajout récupération du portefeuille CEX
+        address cexWallet = vm.envAddress("CEX_WALLET");
+        console2.log("CEX wallet:", cexWallet);
+
         uint256 deployerBalance = deployer.balance;
         console2.log("Deployer balance:", deployerBalance / 1e18, "ETH/BNB");
         
@@ -52,7 +56,7 @@ contract DeployVaulton is Script {
         console2.log("");
         console2.log("=== DEPLOYING CONTRACT ===");
 
-        Vaulton vaulton = new Vaulton(pancakeRouter, marketingWallet);
+        Vaulton vaulton = new Vaulton(pancakeRouter, marketingWallet, cexWallet);
 
         console2.log("Contract deployed at:", address(vaulton));
 
@@ -100,7 +104,7 @@ contract DeployVaulton is Script {
         console2.log("Router integration verified");
 
         require(vaulton.owner() == deployer, "GETOWNER_FAILED");
-        require(vaulton.autoSellEnabled() == true, "AUTOSELL_FAILED");
+        require(vaulton.autoSellEnabled() == false, "AUTOSELL_FAILED");
         require(vaulton.lastBuybackBlock() == 0, "LASTBUYBACK_FAILED");
         console2.log("Additional functions verified");
 
@@ -135,6 +139,7 @@ contract DeployVaulton is Script {
             uint256 totalBuybackTokensSold_,
             uint256 totalBuybackTokensBurned_,
             uint256 totalBuybacks_,
+            uint256 totalSellOperations_,
             uint256 avgBlocksPerBuyback,
             uint256 totalBuybackBNB_,
             uint256 avgBNBPerBuyback
@@ -147,6 +152,7 @@ contract DeployVaulton is Script {
         require(totalBuybackTokensSold_ == vaulton.totalBuybackTokensSold(), "STATS_BUYBACK_SOLD FAILED");
         require(totalBuybackTokensBurned_ == vaulton.totalBuybackTokensBurned(), "STATS_BUYBACK_BURNED FAILED");
         require(totalBuybacks_ == vaulton.totalBuybacks(), "STATS_TOTAL_BUYBACKS FAILED");
+        require(totalSellOperations_ == vaulton.totalSellOperations(), "STATS_TOTAL_SELL_OPERATIONS FAILED");
         require(avgBlocksPerBuyback == 0, "STATS_AVG_BLOCKS FAILED");
         require(totalBuybackBNB_ == 0, "STATS_BUYBACK_BNB FAILED");
         require(avgBNBPerBuyback == 0, "STATS_AVG_BNB FAILED");

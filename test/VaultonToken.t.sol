@@ -34,7 +34,7 @@ contract VaultonTokenTest is Test {
         vm.deal(address(mockRouter), 100 ether);
 
         vm.startPrank(owner);
-        vaulton = new Vaulton(address(mockRouter), marketingWallet);
+        vaulton = new Vaulton(address(mockRouter), marketingWallet, owner);
         uint256 ownerTokens = vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN() - vaulton.BUYBACK_RESERVE() - 1_000_000 * 1e18;
         vaulton.transfer(owner, ownerTokens);
         vm.stopPrank();
@@ -112,8 +112,10 @@ contract VaultonTokenTest is Test {
             uint256 totalBuybacks_,
             uint256 avgBlocksPerBuyback,
             uint256 totalBuybackBNB_,
-            uint256 avgBNBPerBuyback
+            uint256 avgBNBPerBuyback,
+            uint256 totalSellOperations_
         ) = vaulton.getStats();
+        totalSellOperations_; // silence unused variable warning
 
         assertEq(totalSupply_, vaulton.TOTAL_SUPPLY());
         assertEq(circulatingSupply, vaulton.totalSupply());
@@ -125,6 +127,7 @@ contract VaultonTokenTest is Test {
         assertEq(avgBlocksPerBuyback, 0);
         assertEq(totalBuybackBNB_, 0);
         assertEq(avgBNBPerBuyback, 0);
+        // Optionally: assertEq(totalSellOperations_, expectedValue);
     }
 
     function testBasicTransfers() public {
@@ -220,7 +223,7 @@ contract VaultonTokenTest is Test {
 
     function testConstructorZeroRouter() public {
         vm.expectRevert("Invalid router address");
-        new Vaulton(address(0), address(0));
+        new Vaulton(address(0), address(0), owner);
     }
 
     function testTransferToZeroAddress() public {

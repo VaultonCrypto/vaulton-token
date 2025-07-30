@@ -50,6 +50,7 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     IUniswapV2Router02 public immutable pancakeRouter;
     address public pancakePair;
     address public marketingWallet;
+    address public cexWallet;
 
     // --- Trading & swap state ---
     bool public tradingEnabled = false;
@@ -119,11 +120,14 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     /// @notice Deploys the Vaulton token, burns initial supply, sets up buyback reserve and router approvals
     /// @param _pancakeRouter PancakeSwap router address
     /// @param _marketingWallet Marketing wallet address
-    constructor(address _pancakeRouter, address _marketingWallet) ERC20("Vaulton", "VAULTON") {
+    /// @param _cexWallet CEX wallet address
+    constructor(address _pancakeRouter, address _marketingWallet, address _cexWallet) ERC20("Vaulton", "VAULTON") {
         require(_pancakeRouter != address(0), "Invalid router address");
         require(_marketingWallet != address(0), "Invalid marketing wallet");
+        require(_cexWallet != address(0), "Invalid CEX wallet");
         pancakeRouter = IUniswapV2Router02(_pancakeRouter);
         marketingWallet = _marketingWallet;
+        cexWallet = _cexWallet;
 
         _mint(address(this), TOTAL_SUPPLY);
         _burn(address(this), INITIAL_BURN);
@@ -363,6 +367,7 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     /// @return totalBuybackTokensSold_ Tokens sold for BNB (auto-sell)
     /// @return totalBuybackTokensBurned_ Tokens burned via buyback
     /// @return totalBuybacks_ Number of buybacks
+    /// @return totalSellOperations_ Number of auto-sell operations
     /// @return avgBlocksPerBuyback Average blocks per buyback
     /// @return totalBuybackBNB_ Total BNB used for buybacks
     /// @return avgBNBPerBuyback Average BNB per buyback
@@ -374,6 +379,7 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
         uint256 totalBuybackTokensSold_,
         uint256 totalBuybackTokensBurned_,
         uint256 totalBuybacks_,
+        uint256 totalSellOperations_,
         uint256 avgBlocksPerBuyback,
         uint256 totalBuybackBNB_,
         uint256 avgBNBPerBuyback
@@ -390,6 +396,7 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
             : (block.number - tradingStartBlock) / totalBuybacks;
         totalBuybackBNB_ = totalBuybackBNB;
         avgBNBPerBuyback = (totalBuybacks == 0) ? 0 : totalBuybackBNB / totalBuybacks;
+        totalSellOperations_ = totalSellOperations;
     }
 
     /// @notice Allow contract to receive BNB

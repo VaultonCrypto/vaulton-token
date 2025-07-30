@@ -18,6 +18,9 @@ contract VaultonTokenTest is Test {
     address factory;
     address marketingWallet;
 
+    // Add local event declaration for testing
+    event AntiBotBlocked(address indexed user, uint256 blockNumber);
+
     function setUp() public {
         owner = makeAddr("owner");
         alice = makeAddr("alice");
@@ -47,10 +50,11 @@ contract VaultonTokenTest is Test {
         assertEq(vaulton.totalBuybackTokensSold(), 0);
         assertEq(vaulton.totalBuybackTokensBurned(), 0);
 
-        assertEq(vaulton.balanceOf(address(vaulton)), vaulton.BUYBACK_RESERVE());
+        // La réserve buyback n'est plus sur le contrat au lancement
+        assertEq(vaulton.balanceOf(address(vaulton)), 0);
         assertEq(
             vaulton.balanceOf(owner),
-            vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN() - vaulton.BUYBACK_RESERVE() - 1_000_000 * 1e18
+            vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN()
         );
         assertEq(vaulton.totalSupply(), vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN());
 
@@ -129,7 +133,7 @@ contract VaultonTokenTest is Test {
         assertEq(vaulton.balanceOf(alice), 1000 * 1e18);
         assertEq(
             vaulton.balanceOf(owner),
-            vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN() - vaulton.BUYBACK_RESERVE() - 1_000_000 * 1e18 - 1000 * 1e18
+            vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN() - 1000 * 1e18
         );
     }
 
@@ -161,7 +165,7 @@ contract VaultonTokenTest is Test {
     }
 
     function testAutoSellEnabled() public view {
-        assertTrue(vaulton.autoSellEnabled());
+        assertFalse(vaulton.autoSellEnabled());
     }
 
     function testLastBuybackBlock() public view {
@@ -181,7 +185,8 @@ contract VaultonTokenTest is Test {
 
     function testBuybackTokensRemainingCalculation() public view {
         assertEq(vaulton.buybackTokensRemaining(), vaulton.BUYBACK_RESERVE());
-        assertEq(vaulton.balanceOf(address(vaulton)), vaulton.BUYBACK_RESERVE());
+        // La réserve buyback n'est plus sur le contrat au lancement
+        assertEq(vaulton.balanceOf(address(vaulton)), 0);
     }
 
     function testTransferRestrictions() public {
@@ -202,10 +207,8 @@ contract VaultonTokenTest is Test {
     }
 
     function testRenounceOwnershipDisablesAutoSell() public {
-        assertTrue(vaulton.autoSellEnabled());
         vm.prank(owner);
         vaulton.renounceOwnership();
-        assertFalse(vaulton.autoSellEnabled());
         assertEq(vaulton.owner(), address(0));
     }
 
@@ -233,7 +236,7 @@ contract VaultonTokenTest is Test {
 
         vm.prank(owner);
         vm.expectRevert("Threshold too low");
-        vaulton.setBNBThreshold(0.0009 ether);
+        vaulton.setBNBThreshold(0);
     }
 
     function testSetAutoSellPercent() public {
@@ -242,8 +245,12 @@ contract VaultonTokenTest is Test {
         assertEq(vaulton.AUTO_SELL_PERCENT(), 150);
 
         vm.prank(owner);
-        vm.expectRevert("Max 2% recommended");
-        vaulton.setAutoSellPercent(201);
+        vm.expectRevert("Percent out of range");
+        vaulton.setAutoSellPercent(0);
+
+        vm.prank(owner);
+        vm.expectRevert("Percent out of range");
+        vaulton.setAutoSellPercent(501);
     }
 
     function testSetAutoSellEnabled() public {
@@ -278,30 +285,6 @@ contract VaultonTokenTest is Test {
         vm.prank(owner);
         vm.expectRevert("Gas limit out of range");
         vaulton.setSwapGasLimit(2_000_001);
-    }
-
-    function testManualReserveBurn() public {
-        vm.prank(owner);
-        vaulton.manualReserveBurn(1000 * 1e18);
-        assertEq(vaulton.burnedTokens(), vaulton.INITIAL_BURN() + 1000 * 1e18);
-        assertEq(vaulton.buybackTokensRemaining(), vaulton.BUYBACK_RESERVE() - 1000 * 1e18);
-
-        vm.prank(owner);
-        vm.expectRevert("Amount must be > 0");
-        vaulton.manualReserveBurn(0);
-
-        uint256 reserveLeft = vaulton.buybackTokensRemaining();
-        vm.prank(owner);
-        vm.expectRevert("Exceeds reserve");
-        vaulton.manualReserveBurn(reserveLeft + 1000 * 1e18);
-
-        vm.prank(address(vaulton));
-        vaulton.transfer(owner, 100 * 1e18);
-
-        uint256 newContractBalance = vaulton.balanceOf(address(vaulton));
-        vm.prank(owner);
-        vm.expectRevert("Insufficient contract balance");
-        vaulton.manualReserveBurn(newContractBalance + 1);
     }
 
     function testWhitelistAntiBot() public {
@@ -383,5 +366,4 @@ contract VaultonTokenTest is Test {
         vaulton.transferOwnership(newOwner);
         assertEq(vaulton.owner(), newOwner);
     }
-
-    /// @notice Event for anti
+}

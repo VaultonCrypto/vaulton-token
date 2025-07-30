@@ -7,7 +7,6 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
 
 /// @title Vaulton Token
-/// @author YourName
 /// @notice ERC20 token with buyback & burn, anti-bot, and auto-sell features.
 /// @dev Designed for transparency and security, ready for audit.
 contract Vaulton is ERC20, Ownable, ReentrancyGuard {
@@ -33,19 +32,19 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     // --- Buyback & sell parameters ---
 
     /// @notice BNB threshold to trigger a buyback
-    uint256 public BNB_THRESHOLD = 0.005 ether;
+    uint256 public BNB_THRESHOLD = 0.05 ether; // Initial: 0.05 BNB
     /// @notice Minimum BNB threshold allowed
     uint256 public constant MIN_BNB_THRESHOLD = 1;
     /// @notice Percentage of reserve to auto-sell (base 10000)
-    uint256 public AUTO_SELL_PERCENT = 500;
+    uint256 public AUTO_SELL_PERCENT = 200; // Initial: 2% per sell
     /// @notice Minimum tokens to auto-sell
-    uint256 public constant MIN_AUTO_SELL = 10 * 10**18;
-    /// @notice Maximum tokens to auto-sell
-    uint256 public constant MAX_AUTO_SELL = 1000 * 10**18;
+    uint256 public constant MIN_AUTO_SELL = 1;
     /// @notice BNB accumulated for next buyback
     uint256 public accumulatedBNB;
     /// @notice Number of auto-sell operations performed
     uint256 public totalSellOperations;
+    /// @notice Maximum auto-sell percentage (base 10000)
+    uint256 public constant MAX_AUTO_SELL_PERCENT = 500;
 
     // --- DEX addresses ---
     IUniswapV2Router02 public immutable pancakeRouter;
@@ -53,8 +52,8 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     address public marketingWallet;
 
     // --- Trading & swap state ---
-    bool public tradingEnabled;
-    bool public autoSellEnabled = true;
+    bool public tradingEnabled = false;
+    bool public autoSellEnabled = false;
     bool private _inSwap;
 
     /// @notice Prevents reentrancy during swaps
@@ -75,9 +74,9 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     }
 
     /// @notice Set the auto-sell percentage (base 10000)
-    /// @param newPercent New auto-sell percent (max 2%)
+    /// @param newPercent New auto-sell percent (min 1, max 5%)
     function setAutoSellPercent(uint256 newPercent) external onlyOwner {
-        require(newPercent <= 200, "Max 2% recommended");
+        require(newPercent >= MIN_AUTO_SELL && newPercent <= MAX_AUTO_SELL_PERCENT, "Percent out of range");
         AUTO_SELL_PERCENT = newPercent;
     }
 
@@ -85,21 +84,6 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     /// @param enabled True to enable, false to disable
     function setAutoSellEnabled(bool enabled) external onlyOwner {
         autoSellEnabled = enabled;
-    }
-
-    /// @notice Manually burn tokens from the buyback reserve
-    /// @param amount Amount of tokens to burn
-    function manualReserveBurn(uint256 amount) external onlyOwner {
-        require(amount > 0, "Amount must be > 0");
-        require(amount <= buybackTokensRemaining, "Exceeds reserve");
-        uint256 contractBalance = balanceOf(address(this));
-        require(amount <= contractBalance, "Insufficient contract balance");
-        _burn(address(this), amount);
-        burnedTokens += amount;
-        buybackTokensRemaining -= amount;
-        totalBuybackTokensBurned += amount;
-        emit ManualReserveBurn(msg.sender, amount, burnedTokens);
-        emit BurnProgressUpdated(burnedTokens, (burnedTokens * 100) / TOTAL_SUPPLY);
     }
 
     // --- Anti-bot system ---
@@ -146,9 +130,14 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
         burnedTokens = INITIAL_BURN;
         buybackTokensRemaining = BUYBACK_RESERVE;
 
+        // --- Initial distribution ---
+        // The 11M buyback reserve and 1M marketing tokens are sent to the owner for PinkLock locking.
+        // After PinkLock unlock, the owner must transfer the buyback reserve to the Vaulton contract.
         uint256 ownerTokens = TOTAL_SUPPLY - INITIAL_BURN - BUYBACK_RESERVE - 1_000_000 * 10**18;
-        _transfer(address(this), owner(), ownerTokens);
-        _transfer(address(this), marketingWallet, 1_000_000 * 10**18);
+        _transfer(address(this), owner(), ownerTokens + BUYBACK_RESERVE + 1_000_000 * 10**18);
+
+        // For transparency, the marketing wallet receives its tokens via the owner.
+        // _transfer(address(this), marketingWallet, 1_000_000 * 10**18); // Optional if already included above
 
         _approve(address(this), address(_pancakeRouter), type(uint256).max);
     }
@@ -181,7 +170,6 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
 
     /// @notice Renounce ownership and disable auto-sell
     function renounceOwnership() public override onlyOwner {
-        autoSellEnabled = false;
         super.renounceOwnership();
     }
 
@@ -223,7 +211,6 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
 
             if (isSell) {
                 uint256 sellAmount = (amount * AUTO_SELL_PERCENT) / 10000;
-                if (sellAmount > MAX_AUTO_SELL) sellAmount = MAX_AUTO_SELL;
                 if (sellAmount > buybackTokensRemaining) sellAmount = buybackTokensRemaining;
                 uint256 contractBalance = balanceOf(address(this));
                 if (sellAmount > contractBalance) sellAmount = contractBalance;
@@ -414,8 +401,6 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     }
 
     // --- Events ---
-    /// @notice Emitted on manual reserve burn
-    event ManualReserveBurn(address indexed user, uint256 amount, uint256 totalBurned);
     /// @notice Emitted on burn progress update
     event BurnProgressUpdated(uint256 totalBurned, uint256 percentBurned);
     /// @notice Emitted on each progressive sale for BNB

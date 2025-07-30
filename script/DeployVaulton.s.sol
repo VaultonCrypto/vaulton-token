@@ -48,22 +48,18 @@ contract DeployVaulton is Script {
         }
         
         vm.startBroadcast(deployerPrivateKey);
-        
+
         console2.log("");
         console2.log("=== DEPLOYING CONTRACT ===");
-        
+
         Vaulton vaulton = new Vaulton(pancakeRouter, marketingWallet);
 
         console2.log("Contract deployed at:", address(vaulton));
 
-        // --- Transfert de la réserve buyback à l'owner pour lock ---
-        uint256 buybackReserve = vaulton.BUYBACK_RESERVE();
-        address ownerAddr = deployer;
-        // Vérifie que le contrat détient bien la réserve
-        require(vaulton.balanceOf(address(vaulton)) >= buybackReserve, "Reserve insuffisante dans le contrat");
-        // Transfert la réserve à l'owner
-        vaulton.transfer(ownerAddr, buybackReserve);
-        console2.log("Buyback reserve transferred to owner for locking:", buybackReserve / 1e18, "tokens");
+        // --- INSTRUCTIONS FOR OWNER ---
+        console2.log("IMPORTANT: Send the buyback reserve to the Vaulton contract manually!");
+        console2.log("Command: vaulton.transfer(address(vaulton), vaulton.BUYBACK_RESERVE()) from the owner.");
+        console2.log("After locking on PinkLock, unlock and transfer to the contract before launch.");
 
         console2.log("");
         console2.log("=== COMPREHENSIVE TESTING ===");
@@ -79,11 +75,12 @@ contract DeployVaulton is Script {
         require(vaulton.burnedTokens() == vaulton.INITIAL_BURN(), "INITIAL_BURN FAILED");
         console2.log("Initial burn verified");
 
-        require(vaulton.balanceOf(address(vaulton)) == vaulton.BUYBACK_RESERVE(), "BUYBACK_RESERVE FAILED");
-        console2.log("Buyback reserve verified");
+        // Correction : la réserve buyback n'est pas sur le contrat au lancement
+        require(vaulton.balanceOf(address(vaulton)) == 0, "BUYBACK_RESERVE FAILED");
+        console2.log("Buyback reserve not in contract at deployment (expected, must be sent manually after lock).");
 
         {
-            uint256 expectedOwnerBalance = vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN() - vaulton.BUYBACK_RESERVE() - 1_000_000 * 1e18;
+            uint256 expectedOwnerBalance = vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN();
             require(vaulton.balanceOf(deployer) == expectedOwnerBalance, "OWNER_BALANCE FAILED");
             console2.log("Owner balance verified");
         }
@@ -117,6 +114,7 @@ contract DeployVaulton is Script {
         console2.log("=== SECURITY VERIFICATION ===");
 
         // Vérifier que withdraw() est bien bloquée
+        // SECURITY NOTE: Manual BNB withdrawal is blocked by design.
         try vaulton.withdraw() {
             revert("SECURITY_FAILED: withdrawBNB should be blocked");
         } catch {

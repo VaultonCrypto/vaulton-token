@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity 0.8.30;
 
 import "../src/VaultonToken.sol";
 
 contract TestVaulton is Vaulton {
-    constructor(address router, address marketingWallet, address thirdArg)
-        Vaulton(router, marketingWallet, thirdArg)
+    constructor(address router, address cexWallet) // FIX: Only 2 parameters
+        Vaulton(router, cexWallet) // FIX: Only 2 arguments
     {}
 
     // Remplace la fonction interne pour les tests

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity 0.8.30;
 
 import "forge-std/Script.sol";
 import "forge-std/console2.sol";
@@ -36,10 +36,6 @@ contract DeployVaulton is Script {
         address deployer = vm.addr(deployerPrivateKey);
         console2.log("Deployer:", deployer);
 
-        // Ajout récupération du portefeuille marketing
-        address marketingWallet = vm.envAddress("MARKETING_WALLET");
-        console2.log("Marketing wallet:", marketingWallet);
-
         // Ajout récupération du portefeuille CEX
         address cexWallet = vm.envAddress("CEX_WALLET");
         console2.log("CEX wallet:", cexWallet);
@@ -56,7 +52,7 @@ contract DeployVaulton is Script {
         console2.log("");
         console2.log("=== DEPLOYING CONTRACT ===");
 
-        Vaulton vaulton = new Vaulton(pancakeRouter, marketingWallet, cexWallet);
+        Vaulton vaulton = new Vaulton(pancakeRouter, cexWallet);
 
         console2.log("Contract deployed at:", address(vaulton));
 
@@ -119,11 +115,12 @@ contract DeployVaulton is Script {
 
         // Vérifier que withdraw() est bien bloquée
         // SECURITY NOTE: Manual BNB withdrawal is blocked by design.
-        try vaulton.withdraw() {
-            revert("SECURITY_FAILED: withdrawBNB should be blocked");
-        } catch {
-            console2.log("BNB withdrawal properly blocked");
-        }
+        // try vaulton.withdraw() {
+        //     revert("SECURITY_FAILED: withdrawBNB should be blocked");
+        // } catch {
+        //     console2.log("BNB withdrawal properly blocked");
+        // }
+        // REMOVE the above block
 
         // Les constantes USER_COOLDOWN, BUYBACK_COOLDOWN, BUYBACK_MULTIPLE n'existent plus dans VaultonToken.sol.
         // Ces vérifications sont donc retirées.
@@ -132,30 +129,16 @@ contract DeployVaulton is Script {
 
     function _testStats(Vaulton vaulton) internal view {
         (
-            uint256 totalSupply_,
             uint256 circulatingSupply,
             uint256 burnedTokens_,
             uint256 buybackTokensRemaining_,
-            uint256 totalBuybackTokensSold_,
-            uint256 totalBuybackTokensBurned_,
-            uint256 totalBuybacks_,
-            uint256 totalSellOperations_,
-            uint256 avgBlocksPerBuyback,
-            uint256 totalBuybackBNB_,
-            uint256 avgBNBPerBuyback
-        ) = vaulton.getStats();
+            uint256 accumulatedBNB_
+        ) = vaulton.getBasicStats();
         
-        require(totalSupply_ == vaulton.TOTAL_SUPPLY(), "STATS_TOTAL_SUPPLY FAILED");
         require(circulatingSupply == vaulton.totalSupply(), "STATS_CIRCULATING FAILED");
         require(burnedTokens_ == vaulton.burnedTokens(), "STATS_BURNED FAILED");
         require(buybackTokensRemaining_ == vaulton.buybackTokensRemaining(), "STATS_BUYBACK_REMAINING FAILED");
-        require(totalBuybackTokensSold_ == vaulton.totalBuybackTokensSold(), "STATS_BUYBACK_SOLD FAILED");
-        require(totalBuybackTokensBurned_ == vaulton.totalBuybackTokensBurned(), "STATS_BUYBACK_BURNED FAILED");
-        require(totalBuybacks_ == vaulton.totalBuybacks(), "STATS_TOTAL_BUYBACKS FAILED");
-        require(totalSellOperations_ == vaulton.totalSellOperations(), "STATS_TOTAL_SELL_OPERATIONS FAILED");
-        require(avgBlocksPerBuyback == 0, "STATS_AVG_BLOCKS FAILED");
-        require(totalBuybackBNB_ == 0, "STATS_BUYBACK_BNB FAILED");
-        require(avgBNBPerBuyback == 0, "STATS_AVG_BNB FAILED");
+        require(accumulatedBNB_ == 0, "STATS_ACCUMULATED_BNB FAILED"); // ✅ AJOUT
         console2.log("Stats function verified");
     }
 

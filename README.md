@@ -29,23 +29,6 @@ This repository contains proprietary smart contract code and business logic for 
 - **🔒 Immutable Rules**: Hardcoded rules that cannot be changed after deployment
 - **📈 Price Support**: 33% of supply dedicated to buyback reserves
 
-## 📋 Internal Repository Structure
-
-```
-├── contracts/          # Smart contract source code (CONFIDENTIAL)
-│   ├── Vaulton.sol     # Main token contract
-│   ├── interfaces/     # Contract interfaces
-│   └── libraries/      # Custom libraries
-├── docs/               # Internal documentation
-│   ├── technical/      # Technical specifications
-│   ├── security/       # Security analysis
-│   └── deployment/     # Deployment procedures
-├── scripts/            # Deployment and management scripts
-├── tests/              # Comprehensive test suites
-├── audits/             # Security audit reports (CONFIDENTIAL)
-└── deployment/         # Production deployment configs
-```
-
 ## 🛡️ Security & Confidentiality
 
 ### 🔐 **Code Protection**
@@ -82,39 +65,13 @@ npm run security:check
 npm run deploy:private-testnet
 ```
 
-## 📈 Development Phases
-
-### Phase 1: Core Development ✅
-- [x] Smart contract architecture
-- [x] Security mechanisms implementation
-- [x] Internal testing suite
-- [x] Code optimization
-
-### Phase 2: Security & Testing 🚧
-- [x] Internal security review
-- [ ] External security audit
-- [ ] Stress testing
-- [ ] Gas optimization
-
-### Phase 3: Pre-Launch 📋
-- [ ] Final security audit
-- [ ] Deployment scripts
-- [ ] Launch procedures
-- [ ] Monitoring systems
-
-### Phase 4: Launch & Monitoring 🎯
-- [ ] Mainnet deployment
-- [ ] Real-time monitoring
-- [ ] Emergency procedures
-- [ ] Performance analysis
-
 ## 🔗 Public Information
 
 **Public Resources** (for community):
-- **Website**: [Official Site](https://vaulton.io)
+- **Website**: [Official Site](https://vaulton.xyz)
 - **Telegram**: [https://t.me/VaultonOfficial](https://t.me/VaultonOfficial)
 - **Twitter**: [https://x.com/CryptoVaulton](https://x.com/CryptoVaulton)
-- **Whitepaper**: [Technical Documentation](https://vaulton.io/whitepaper)
+- **Whitepaper**: [Technical Documentation](https://vaulton.xyz/vaulton-whitepaper)
 
 **Contract Information** (post-launch):
 - **Network**: Binance Smart Chain (BSC)
@@ -167,9 +124,7 @@ Unauthorized access, use, or disclosure is strictly prohibited and may result in
 ## 📞 Internal Contact
 
 For repository access or questions:
-- **Technical Lead**: [internal contact]
-- **Security Team**: [security@vaulton.io]
-- **Project Manager**: [internal contact]
+- **Project Manager**: [nicolas@vaulton.xyz]
 
 ---
 

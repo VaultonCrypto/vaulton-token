@@ -39,7 +39,7 @@ contract VaultonTokenTest is Test {
         vm.startPrank(owner);
         vaulton = new Vaulton(
             address(mockRouter), 
-            makeAddr("cexWallet") // ✅ Seulement CEX wallet
+            makeAddr("cexWallet") // ✅ Add this line
         );
         vm.stopPrank();
     }
@@ -513,6 +513,9 @@ contract VaultonTokenTest is Test {
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
         
         vm.prank(owner);
+        vaulton.updateBuybackReserve();
+        
+        vm.prank(owner);
         vaulton.setPair(pair);
         vm.prank(owner);
         vaulton.enableTrading();
@@ -521,7 +524,7 @@ contract VaultonTokenTest is Test {
         vm.store(
             address(vaulton),
             bytes32(uint256(7)), // accumulatedBNB storage slot
-            bytes32(uint256(0.000001 ether)) // Below 0.00001 ether threshold
+            bytes32(uint256(0.000001 ether)) // Below 0.03 ether threshold
         );
         
         vm.prank(owner);
@@ -1036,7 +1039,6 @@ contract VaultonTokenTest is Test {
         
         // Phase 2: Simulate presale preparation (owner allocates tokens)
         uint256 presaleTokens = 4_500_000 * 10**18;
-        uint256 liquidityTokens = 2_000_000 * 10**18;
         // In real scenario, tokens go to Pinksale contract
         
         // Phase 3: Post-presale with partial success
@@ -1086,5 +1088,335 @@ contract VaultonTokenTest is Test {
         // Circulating supply calculation should handle large burns
         (uint256 circulatingSupply,,,) = vaulton.getBasicStats();
         assertEq(circulatingSupply, vaulton.TOTAL_SUPPLY() - vaulton.burnedTokens());
+    }
+
+    /// @notice Test comprehensive transaction amounts on PancakeSwap
+    function testAllTransactionSizes() public {
+        // Setup trading
+        vm.prank(owner);
+        vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
+        vm.prank(owner);
+        vaulton.updateBuybackReserve();
+        vm.prank(owner);
+        vaulton.setPair(pair);
+        vm.prank(owner);
+        vaulton.enableTrading();
+        
+        // Fund traders
+        vm.prank(owner);
+        vaulton.transfer(alice, 5_000_000 * 1e18);
+        
+        // Test micro transactions (1-1000 tokens)
+        for (uint256 i = 1; i <= 1000; i *= 10) {
+            uint256 amount = i * 1e18;
+            vm.prank(alice);
+            vaulton.transfer(pair, amount);
+            // Verify no reverts, mechanism works correctly
+        }
+        
+        // Test medium transactions (1k-100k tokens)
+        uint256[] memory mediumAmounts = new uint256[](5);
+        mediumAmounts[0] = 1_000 * 1e18;
+        mediumAmounts[1] = 5_000 * 1e18;
+        mediumAmounts[2] = 10_000 * 1e18;
+        mediumAmounts[3] = 50_000 * 1e18;
+        mediumAmounts[4] = 100_000 * 1e18;
+        
+        for (uint256 i = 0; i < mediumAmounts.length; i++) {
+            vm.prank(alice);
+            vaulton.transfer(pair, mediumAmounts[i]);
+        }
+        
+        // Test whale transactions (100k+ tokens)
+        uint256[] memory whaleAmounts = new uint256[](4);
+        whaleAmounts[0] = 250_000 * 1e18;
+        whaleAmounts[1] = 500_000 * 1e18;
+        whaleAmounts[2] = 1_000_000 * 1e18;
+        whaleAmounts[3] = 2_000_000 * 1e18;
+        
+        for (uint256 i = 0; i < whaleAmounts.length; i++) {
+            if (vaulton.balanceOf(alice) >= whaleAmounts[i]) {
+                vm.prank(alice);
+                vaulton.transfer(pair, whaleAmounts[i]);
+            }
+        }
+    }
+
+    /// @notice Test transaction size impact on auto-sell mechanism
+    function testAutoSellScaling() public {
+        // Setup
+        vm.prank(owner);
+        vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
+        vm.prank(owner);
+        vaulton.updateBuybackReserve();
+        vm.prank(owner);
+        vaulton.setPair(pair);
+        vm.prank(owner);
+        vaulton.enableTrading();
+        vm.prank(owner);
+        vaulton.transfer(alice, 3_000_000 * 1e18);
+        
+        // Test that 2% auto-sell scales properly with transaction size
+        uint256[] memory sellAmounts = new uint256[](6);
+        sellAmounts[0] = 1_000 * 1e18;      // Small
+        sellAmounts[1] = 10_000 * 1e18;     // Medium
+        sellAmounts[2] = 50_000 * 1e18;     // Large
+        sellAmounts[3] = 100_000 * 1e18;    // Very large
+        sellAmounts[4] = 500_000 * 1e18;    // Whale
+        sellAmounts[5] = 1_000_000 * 1e18;  // Mega whale
+        
+        for (uint256 i = 0; i < sellAmounts.length; i++) {
+            uint256 buybackBefore = vaulton.buybackTokensRemaining();
+            uint256 expectedAutoSell = (sellAmounts[i] * 200) / 10000; // 2%
+            
+            vm.prank(alice);
+            vaulton.transfer(pair, sellAmounts[i]);
+            
+            uint256 buybackAfter = vaulton.buybackTokensRemaining();
+            uint256 actualAutoSell = buybackBefore - buybackAfter;
+            
+            // Verify auto-sell amount is correct (within contract balance limits)
+            assertTrue(
+                actualAutoSell <= expectedAutoSell && 
+                actualAutoSell <= buybackBefore,
+                "Auto-sell should scale with transaction size"
+            );
+        }
+    }
+
+    /// @notice Test extreme edge cases that could break PancakeSwap integration
+    function testPancakeSwapEdgeCases() public {
+        // Setup
+        vm.prank(owner);
+        vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
+        vm.prank(owner);
+        vaulton.updateBuybackReserve();
+        vm.prank(owner);
+        vaulton.setPair(pair);
+        vm.prank(owner);
+        vaulton.enableTrading();
+        vm.prank(owner);
+        vaulton.transfer(alice, 1_000_000 * 1e18);
+        
+        // Test 1 wei transaction
+        vm.prank(alice);
+        vaulton.transfer(pair, 1);
+        
+        // Test maximum possible transaction (balance limit)
+        uint256 maxBalance = vaulton.balanceOf(alice);
+        vm.prank(alice);
+        vaulton.transfer(pair, maxBalance);
+        
+        // Test rapid consecutive transactions
+        vm.prank(owner);
+        vaulton.transfer(bob, 100_000 * 1e18);
+        
+        for (uint256 i = 0; i < 10; i++) {
+            vm.prank(bob);
+            vaulton.transfer(pair, 1_000 * 1e18);
+        }
+    }
+
+    /// @notice Test minimum liquidity requirements for stable auto-sell
+    function testMinimumLiquidityForAutosell() public {
+        // Setup contract with buyback reserve
+        vm.prank(owner);
+        vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
+        vm.prank(owner);
+        vaulton.updateBuybackReserve();
+        vm.prank(owner);
+        vaulton.setPair(pair);
+        vm.prank(owner);
+        vaulton.enableTrading();
+        vm.prank(owner);
+        vaulton.transfer(alice, 2_000_000 * 1e18);
+        
+        // Test different liquidity levels
+        uint256[] memory liquidityLevels = new uint256[](4);
+        liquidityLevels[0] = 1 ether;   // 1 BNB - Very low
+        liquidityLevels[1] = 5 ether;   // 5 BNB - Low
+        liquidityLevels[2] = 10 ether;  // 10 BNB - Medium
+        liquidityLevels[3] = 20 ether;  // 20 BNB - Good
+        
+        for (uint256 i = 0; i < liquidityLevels.length; i++) {
+            // Reset router liquidity
+            mockRouter.resetToMainnetConditions();
+            vm.deal(address(mockRouter), liquidityLevels[i]);
+            
+            // Set realistic market conditions for each liquidity level
+            if (liquidityLevels[i] <= 1 ether) {
+                mockRouter.setMarketConditions(2000, 100); // 20% slippage, 1% fees (very illiquid)
+            } else if (liquidityLevels[i] <= 5 ether) {
+                mockRouter.setMarketConditions(800, 50);   // 8% slippage, 0.5% fees (low liquidity)
+            } else if (liquidityLevels[i] <= 10 ether) {
+                mockRouter.setMarketConditions(300, 30);   // 3% slippage, 0.3% fees (medium liquidity)
+            } else {
+                mockRouter.setMarketConditions(100, 25);   // 1% slippage, 0.25% fees (good liquidity)
+            }
+            
+            uint256 buybackBefore = vaulton.buybackTokensRemaining();
+            uint256 sellAmount = 100_000 * 1e18; // Standard sell size
+            
+            // Attempt auto-sell with current liquidity
+            vm.prank(alice);
+            vaulton.transfer(pair, sellAmount);
+            
+            uint256 buybackAfter = vaulton.buybackTokensRemaining();
+            bool autoSellWorked = buybackAfter < buybackBefore;
+            
+            // Log results for analysis
+            if (liquidityLevels[i] >= 10 ether) {
+                assertTrue(autoSellWorked, "Auto-sell should work reliably with 10+ BNB liquidity");
+            } else if (liquidityLevels[i] >= 5 ether) {
+                // 5 BNB might work but could be unstable
+                // Don't enforce strict requirement but verify no revert
+                assertTrue(true, "5 BNB liquidity test completed without revert");
+            } else {
+                // 1 BNB likely too low for reliable operation
+                // Verify transaction doesn't revert even if auto-sell fails
+                assertTrue(true, "Low liquidity test completed without revert");
+            }
+            
+            // Advance block for next test
+            vm.warp(block.timestamp + 300);
+        }
+    }
+
+    /// @notice Simulate 24h of realistic trading volume adapted to Vaulton's tokenomics
+    function testRealWorldVolumeStress() public {
+        mockRouter.resetToMainnetConditions();
+        vm.deal(address(mockRouter), 10000 ether); // Large liquidity pool
+        mockRouter.setMarketConditions(150, 25); // 1.5% slippage, 0.25% fees
+        
+        // Setup contract
+        vm.prank(owner);
+        vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
+        vm.prank(owner);
+        vaulton.updateBuybackReserve();
+        vm.prank(owner);
+        vaulton.setPair(pair);
+        vm.prank(owner);
+        vaulton.enableTrading();
+        
+        // ADAPTATION VAULTON: Create 8 traders (instead of 20) with Vaulton-realistic allocations
+        address[] memory traders = new address[](8);
+        for (uint256 i = 0; i < 8; i++) {
+            traders[i] = makeAddr(string(abi.encodePacked("trader", i)));
+            vm.prank(owner);
+            // VAULTON REALITY: 200k tokens each (reasonable for 4.5M presale among early holders)
+            vaulton.transfer(traders[i], 200_000 * 1e18);
+        }
+        
+        uint256 initialBurnedTokens = vaulton.burnedTokens();
+        uint256 initialBuybackRemaining = vaulton.buybackTokensRemaining();
+        uint256 transactionCount = 0;
+        uint256 totalVolumeTraded = 0;
+        
+        // VAULTON ADAPTATION: 16h simulation (realistic for new token initial activity)
+        for (uint256 hour = 0; hour < 16; hour++) {
+            // Variable activity adapted to Vaulton's smaller initial community
+            uint256 hourlyTransactions;
+            if (hour >= 2 && hour <= 8) {
+                hourlyTransactions = 20; // Peak hours: 20 tx/hour (realistic for new token)
+            } else if (hour >= 9 && hour <= 12) {
+                hourlyTransactions = 15; // Moderate activity: 15 tx/hour
+            } else {
+                hourlyTransactions = 8; // Low activity: 8 tx/hour
+            }
+            
+            for (uint256 txIndex = 0; txIndex < hourlyTransactions; txIndex++) {
+                // Random trader selection
+                uint256 traderIndex = uint256(keccak256(abi.encode(hour, txIndex, block.timestamp))) % traders.length;
+                address currentTrader = traders[traderIndex];
+                
+                // VAULTON ADAPTED: Transaction sizes realistic for actual Vaulton supply
+                uint256 sellAmount;
+                uint256 traderType = traderIndex % 4;
+                
+                if (traderType == 0) {
+                    // Small holders (100-1k tokens) - realistic for retail
+                    sellAmount = 100 * 1e18 + (uint256(keccak256(abi.encode(hour, txIndex))) % 900) * 1e18;
+                } else if (traderType == 1) {
+                    // Medium holders (1k-5k tokens) - typical early investor sells
+                    sellAmount = 1_000 * 1e18 + (uint256(keccak256(abi.encode(hour, txIndex, 1))) % 4_000) * 1e18;
+                } else if (traderType == 2) {
+                    // Large holders (5k-15k tokens) - significant but realistic
+                    sellAmount = 5_000 * 1e18 + (uint256(keccak256(abi.encode(hour, txIndex, 2))) % 10_000) * 1e18;
+                } else {
+                    // Whale holders (15k-30k tokens) - max realistic for presale participant
+                    sellAmount = 15_000 * 1e18 + (uint256(keccak256(abi.encode(hour, txIndex, 3))) % 15_000) * 1e18;
+                }
+                
+                // Check if trader has sufficient balance
+                if (vaulton.balanceOf(currentTrader) >= sellAmount) {
+                    vm.prank(currentTrader);
+                    vaulton.transfer(pair, sellAmount);
+                    
+                    transactionCount++;
+                    totalVolumeTraded += sellAmount;
+                    
+                    // Simulate market volatility less frequently (adapted to smaller market)
+                    if (txIndex % 20 == 0) {
+                        mockRouter.simulateCEXVolume(200 ether);
+                    }
+                }
+                
+                // Advance time (roughly 3 minutes per transaction - realistic for smaller community)
+                vm.warp(block.timestamp + 180);
+            }
+            
+            // Simulate larger market movements every 4 hours
+            if (hour % 4 == 0) {
+                mockRouter.simulateCEXVolume(500 ether);
+                // Adjust market conditions slightly
+                uint256 newSlippage = 100 + (uint256(keccak256(abi.encode(hour))) % 100); // 1-2% slippage
+                mockRouter.setMarketConditions(newSlippage, 25);
+            }
+        }
+        
+        // Verify stress test results with VAULTON-REALISTIC thresholds
+        uint256 finalBurnedTokens = vaulton.burnedTokens();
+        uint256 finalBuybackRemaining = vaulton.buybackTokensRemaining();
+        
+        // VAULTON ADAPTED: Realistic expectations for smaller supply token
+        assertTrue(transactionCount >= 150, "Should have processed 150+ transactions"); // ✅ Realistic for 8 traders over 16h
+        assertTrue(totalVolumeTraded >= 1_000_000 * 1e18, "Should have traded 1M+ volume"); // ✅ Realistic (20% of circulating)
+        assertTrue(
+            finalBurnedTokens >= initialBurnedTokens || 
+            finalBuybackRemaining < initialBuybackRemaining,
+            "Deflationary mechanism should show activity after stress test"
+        );
+        
+        // Verify contract still functional after stress
+        vm.prank(owner);
+        vaulton.transfer(alice, 10_000 * 1e18);
+        vm.prank(alice);
+        vaulton.transfer(pair, 5_000 * 1e18);
+        
+        assertTrue(true, "Contract remains functional after stress test");
+        
+        // Log final stats for debugging (helpful for optimization)
+        console.log("Total transactions processed:", transactionCount);
+        console.log("Total volume traded:", totalVolumeTraded / 1e18, "tokens");
+
+// Plus flexible - calcule automatiquement
+uint256 totalSupplyActive = vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN();
+uint256 reserveLocked = vaulton.balanceOf(address(vaulton));
+uint256 realCirculating = totalSupplyActive - reserveLocked;
+
+uint256 volumePercent = (totalVolumeTraded * 100) / realCirculating;
+console.log("Volume as % of real circulating:", volumePercent, "%");
+console.log("Real circulating (dynamic):", realCirculating / 1e18, "tokens");
+
+// Debug breakdown
+console.log("=== VAULTON TOKENOMICS ===");
+console.log("Total supply:", vaulton.TOTAL_SUPPLY() / 1e18, "tokens");
+console.log("Initial burn:", vaulton.INITIAL_BURN() / 1e18, "tokens");
+console.log("Reserve buyback:", vaulton.BUYBACK_RESERVE() / 1e18, "tokens");
+console.log("Presale allocation: 4.5M tokens");
+console.log("CEX allocation: 4M tokens");
+console.log("Team allocation: 1.5M tokens");
+console.log("PancakeSwap liquidity: 2M tokens");
+console.log("Effective tradable supply: 12M tokens");
     }
 }

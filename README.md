@@ -37,28 +37,6 @@ This repository contains proprietary smart contract code and business logic for 
 - Custom security features
 - Optimized gas efficiency algorithms
 
-## 🚀 Development Workflow
-
-### For Authorized Developers
-
-```bash
-# Repository access (team members only)
-git clone https://github.com/VaultonProject/vaulton-private.git
-cd vaulton-private
-
-# Install dependencies
-npm install
-
-# Run internal tests
-npm run test:full
-
-# Security analysis
-npm run security:check
-
-# Deploy to private testnet
-npm run deploy:private-testnet
-```
-
 ## 🔗 Public Information
 
 **Public Resources** (for community):

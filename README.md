@@ -37,12 +37,6 @@ This repository contains proprietary smart contract code and business logic for 
 - Custom security features
 - Optimized gas efficiency algorithms
 
-### 📝 **Documentation Access**
-- Technical specifications (team only)
-- Security audit reports (restricted)
-- Deployment procedures (authorized personnel)
-- Business logic documentation (confidential)
-
 ## 🚀 Development Workflow
 
 ### For Authorized Developers

@@ -57,6 +57,33 @@ The Vaulton smart contract implements a unique deflationary mechanism:
 - Limited owner privileges
 - Transparent mechanisms
 
+## 🔍 Static Analysis
+
+### Slither Security Analysis
+
+The Vaulton smart contract has been analyzed using Slither, a static analysis framework for Solidity. The analysis identified controlled findings that are addressed through our security architecture:
+
+#### Identified Patterns
+- **Reentrancy Warnings**: Detected in DEX interaction functions (`_progressiveSellForBNB`, `_triggerBuybackAndBurn`)
+- **External Calls**: PancakeSwap router interactions for token swaps
+- **State Changes**: Post-call variable updates for tracking accumulated BNB and burn statistics
+
+#### Security Mitigations
+- **OpenZeppelin ReentrancyGuard**: All critical functions protected against reentrancy attacks
+- **Controlled External Calls**: Only trusted PancakeSwap router interactions
+- **State Isolation**: Critical state changes occur in protected contexts
+- **Fail-Safe Design**: Swap failures don't affect core token functionality
+
+#### Analysis Summary
+```
+✅ No critical vulnerabilities detected
+✅ Reentrancy protection properly implemented
+✅ External call patterns follow best practices
+⚠️  Controlled findings documented and mitigated
+```
+
+**Note**: The detected patterns are standard for DEX-integrated tokens and are properly secured through OpenZeppelin's battle-tested ReentrancyGuard implementation.
+
 ## 🔗 Links
 
 - **Website**: [https://vaulton.xyz](https://vaulton.xyz)

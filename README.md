@@ -1,102 +1,103 @@
 # Vaulton: Beyond Gold 🟡
 
-[![BSC](https://img.shields.io/badge/BSC-Binance%20Smart%20Chain-yellow)](https://bscscan.com/)
-[![Status](https://img.shields.io/badge/Status-Private%20Development-red)]()
 [![Telegram](https://img.shields.io/badge/Telegram-Join%20Chat-blue)](https://t.me/VaultonOfficial)
 [![Twitter](https://img.shields.io/badge/Twitter-Follow-1da1f2)](https://x.com/CryptoVaulton)
 
 > **The Zero-Fee Token That Burns Itself**
 
-**⚠️ PRIVATE REPOSITORY - AUTHORIZED PERSONNEL ONLY**
-
 Vaulton is a revolutionary BSC token engineered for institutional adoption through hardcoded smart contract security and progressive, transparent scarcity. Each sell triggers a 2% mechanism that accumulates BNB for automated buyback and burn cycles - creating mathematical buying pressure without any transaction fees.
-
-## 🔒 Repository Access
-
-This repository contains proprietary smart contract code and business logic for the Vaulton project. Access is restricted to:
-
-- Core development team
-- Security auditors
-- Strategic partners
-- Authorized consultants
 
 ## 🚀 Key Features
 
 - **🆓 Zero Transaction Fees**: No taxes ever - true deflation without taxing holders
-- **🔥 Auto-Deflation**: Proprietary automated buyback and burn mechanism
+- **🔥 Auto-Deflation**: Automated buyback and burn mechanism
 - **🏛️ Institutional Security**: 85% of tokens locked, burned, or in automated systems
 - **👥 Community-First**: 95% of tokens reserved for the community
 - **🔒 Immutable Rules**: Hardcoded rules that cannot be changed after deployment
 - **📈 Price Support**: 33% of supply dedicated to buyback reserves
 
-## 🛡️ Security & Confidentiality
+## 📊 Tokenomics
 
-### 🔐 **Code Protection**
-- Proprietary smart contract architecture
-- Unique deflation mechanism implementation
-- Custom security features
-- Optimized gas efficiency algorithms
+- **Total Supply**: 30,000,000 VAULTON
+- **Initial Burn**: 8,000,000 tokens (26.7%)
+- **Buyback Reserve**: 10,000,000 tokens (33.3%)
+- **Community Allocation**: 12,000,000 tokens (40%)
+- **Auto-Sell Trigger**: 2% of each sell transaction
+- **Buyback Threshold**: 0.03 BNB
 
-## 🔗 Public Information
+## 🛠️ Smart Contract
 
-**Public Resources** (for community):
-- **Website**: [Official Site](https://vaulton.xyz)
+The Vaulton smart contract implements a unique deflationary mechanism:
+
+1. **Auto-Sell**: 2% of tokens auto-sold on each transaction
+2. **BNB Accumulation**: Converted tokens accumulate as BNB
+3. **Automated Buyback**: When threshold reached, BNB buys tokens
+4. **Permanent Burn**: Bought tokens sent to dead address
+5. **Progressive Scarcity**: Supply decreases, price support increases
+
+### Contract Features
+
+- **ERC20 Compliant**: Standard token functions
+- **Reentrancy Protection**: Secure against attacks
+- **Owner Functions**: Limited to setup only
+- **Immutable Core**: Mechanism cannot be modified
+- **Gas Optimized**: Efficient execution
+
+## 🔒 Security
+
+### Audit Status
+- **Auditor**: SolidProof
+- **Status**: In Progress
+- **Scope**: Complete smart contract security review
+
+### Security Features
+- OpenZeppelin contracts
+- Reentrancy guards
+- Overflow protection
+- Limited owner privileges
+- Transparent mechanisms
+
+## 🔗 Links
+
+- **Website**: [https://vaulton.xyz](https://vaulton.xyz)
+- **Whitepaper**: [https://vaulton.xyz/vaulton-whitepaper](https://vaulton.xyz/vaulton-whitepaper)
 - **Telegram**: [https://t.me/VaultonOfficial](https://t.me/VaultonOfficial)
 - **Twitter**: [https://x.com/CryptoVaulton](https://x.com/CryptoVaulton)
-- **Whitepaper**: [Technical Documentation](https://vaulton.xyz/vaulton-whitepaper)
 
-**Contract Information** (post-launch):
+## 📋 Contract Information
+
 - **Network**: Binance Smart Chain (BSC)
-- **Contract Address**: Will be published after deployment
+- **Token Name**: Vaulton
 - **Symbol**: VAULTON
 - **Decimals**: 18
+- **Contract Address**: *Will be published after deployment*
 
-## 👥 Team Access
+## 🤝 Contributing
 
-### Core Developers
-- Full repository access
-- Smart contract modification rights
-- Deployment permissions
+We welcome contributions to improve the Vaulton ecosystem:
 
-### Security Auditors
-- Read access to contracts
-- Test suite access
-- Documentation access
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
 
-### Strategic Partners
-- Limited documentation access
-- Business logic overview
-- Technical specifications (selected)
+Please read our contributing guidelines and ensure all tests pass.
 
-## 🔐 Security Protocols
+## 📄 License
 
-### Code Security
-- All commits require review
-- Security-focused development
-- Regular internal audits
-- Restricted deployment access
+This project is licensed under the MIT License
 
-### Information Security
-- No public disclosure of mechanisms
-- Confidential business logic
-- Secured communication channels
-- Limited access documentation
+## ⚠️ Disclaimer
 
-## ⚠️ Confidentiality Notice
+This is experimental software. Use at your own risk. Cryptocurrency investments carry significant risk. Please do your own research before investing.
 
-**IMPORTANT**: This repository contains proprietary and confidential information. By accessing this repository, you agree to:
+The smart contract has been designed with security in mind, but no software is 100% secure. Always verify the contract address and read the code before interacting.
 
-- Maintain strict confidentiality
-- Not disclose any code or mechanisms
-- Not use information for competing projects
-- Report any security vulnerabilities immediately
+## 📞 Contact
 
-Unauthorized access, use, or disclosure is strictly prohibited and may result in legal action.
-
-## 📞 Internal Contact
-
-For repository access or questions:
-- **Project Manager**: [nicolas@vaulton.xyz]
+- **Development Team**: [nicolas@vaulton.xyz](mailto:nicolas@vaulton.xyz)
+- **Community**: [https://t.me/VaultonOfficial](https://t.me/VaultonOfficial)
 
 ---
 
@@ -104,12 +105,10 @@ For repository access or questions:
 
 **Vaulton: Beyond Gold** 🟡
 
-*Proprietary Mathematical Deflation Technology*
+*Mathematical Deflation. Zero Fees. Maximum Transparency.*
 
-[![Private](https://img.shields.io/badge/Repository-Private-red)](https://github.com/VaultonProject/vaulton-private)
-[![Confidential](https://img.shields.io/badge/Code-Confidential-orange)]()
-[![BSC](https://img.shields.io/badge/Target-BSC-yellow)](https://bscscan.com/)
+[![Transparent](https://img.shields.io/badge/Development-Transparent-blue)]()
 
-**AUTHORIZED ACCESS ONLY**
+**Built for the Community**
 
 </div>

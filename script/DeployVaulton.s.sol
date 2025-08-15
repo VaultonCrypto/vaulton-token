@@ -137,7 +137,7 @@ contract DeployVaulton is Script {
         
         require(circulatingSupply == vaulton.totalSupply(), "STATS_CIRCULATING FAILED");
         require(burnedTokens_ == vaulton.burnedTokens(), "STATS_BURNED FAILED");
-        require(buybackTokensRemaining_ == vaulton.buybackTokensRemaining(), "STATS_BUYBACK_REMAINING FAILED");
+        require(buybackTokensRemaining_ == vaulton.getBuybackTokensRemaining(), "STATS_BUYBACK_REMAINING FAILED");
         require(accumulatedBNB_ == 0, "STATS_ACCUMULATED_BNB FAILED"); // ✅ AJOUT
         console2.log("Stats function verified");
     }

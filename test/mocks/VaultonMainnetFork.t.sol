@@ -10,7 +10,7 @@ contract VaultonMainnetForkTest is Test {
     address alice;
     address pair;
     
-    // Vraies adresses BSC Mainnet
+    // Real BSC Mainnet addresses
     address constant PANCAKE_ROUTER = 0x10ED43C718714eb63d5aA57B78B54704E256024E;
     address constant PANCAKE_FACTORY = 0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73;
     address constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
@@ -19,7 +19,7 @@ contract VaultonMainnetForkTest is Test {
     uint256 mainnetFork;
     
     function setUp() public {
-        // Fork BSC mainnet au bloc le plus récent
+        // Fork BSC mainnet at the latest block
         string memory BSC_RPC_URL = vm.envString("BSC_RPC_URL");
         mainnetFork = vm.createFork(BSC_RPC_URL);
         vm.selectFork(mainnetFork);
@@ -27,7 +27,7 @@ contract VaultonMainnetForkTest is Test {
         owner = makeAddr("owner");
         alice = makeAddr("alice");
         
-        // Deal BNB pour les frais de gas
+        // Deal BNB for gas fees
         vm.deal(owner, 100 ether);
         vm.deal(alice, 100 ether);
         
@@ -43,18 +43,15 @@ contract VaultonMainnetForkTest is Test {
         assertEq(vaulton.TOTAL_SUPPLY(), 30_000_000 * 1e18);
         assertEq(vaulton.burnedTokens(), vaulton.INITIAL_BURN());
         
-        // ✅ Corriger cette ligne
         assertEq(address(vaulton.pancakeRouter()), PANCAKE_ROUTER);
     }
     
     function testRealPancakeSwapIntegration() public {
-        // Setup contract avec vraie liquidité
+        // Setup contract with real liquidity
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
         
-        // Créer vraie pair PancakeSwap
+        // Create real PancakeSwap pair
         address realPair = _createPancakePair();
         
         vm.prank(owner);
@@ -62,21 +59,21 @@ contract VaultonMainnetForkTest is Test {
         vm.prank(owner);
         vaulton.enableTrading();
         
-        // Ajouter vraie liquidité
+        // Add real liquidity
         _addLiquidity(realPair, 1_000_000 * 1e18, 50 ether);
         
-        // Test vente réelle
+        // Test real sale
         vm.prank(owner);
         vaulton.transfer(alice, 100_000 * 1e18);
         
-        uint256 buybackBefore = vaulton.buybackTokensRemaining();
+        uint256 buybackBefore = vaulton.getBuybackTokensRemaining();
         
         vm.prank(alice);
         vaulton.transfer(realPair, 50_000 * 1e18);
         
-        // Vérifier que auto-sell fonctionne avec vrai PancakeSwap
-        if (vaulton.buybackTokensRemaining() > 0) {
-            assertTrue(vaulton.buybackTokensRemaining() <= buybackBefore, "Auto-sell should work with sufficient reserves");
+        // Check that auto-sell works with real PancakeSwap
+        if (vaulton.getBuybackTokensRemaining() > 0) { 
+            assertTrue(vaulton.getBuybackTokensRemaining() <= buybackBefore, "Auto-sell should work with sufficient reserves"); // ✅ CORRIGÉ
         } else {
             assertTrue(true, "No buyback tokens remaining - test completed");
         }
@@ -85,8 +82,6 @@ contract VaultonMainnetForkTest is Test {
     function testMainnetBNBThresholdRealistic() public {
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
         
         address realPair = _createPancakePair();
         vm.prank(owner);
@@ -94,18 +89,18 @@ contract VaultonMainnetForkTest is Test {
         vm.prank(owner);
         vaulton.enableTrading();
         
-        // Liquidité réaliste (20 BNB)
+        // Realistic liquidity (20 BNB)
         _addLiquidity(realPair, 2_000_000 * 1e18, 20 ether);
         
         vm.prank(owner);
         vaulton.transfer(alice, 500_000 * 1e18);
         
-        // Ventes progressives pour atteindre seuil 0.03 BNB
+        // Progressive sales to reach the 0.03 BNB threshold
         for (uint i = 0; i < 10; i++) {
             vm.prank(alice);
             vaulton.transfer(realPair, 25_000 * 1e18);
             
-            // Vérifier si buyback déclenché
+            // Check if buyback triggered
             if (vaulton.lastBuybackBlock() > 0) {
                 assertTrue(true, "Buyback triggered at realistic threshold");
                 break;
@@ -116,8 +111,6 @@ contract VaultonMainnetForkTest is Test {
     function testRealSlippageConditions() public {
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
         
         address realPair = _createPancakePair();
         vm.prank(owner);
@@ -125,27 +118,25 @@ contract VaultonMainnetForkTest is Test {
         vm.prank(owner);
         vaulton.enableTrading();
         
-        // Liquidité faible pour tester slippage élevé
+        // Low liquidity to test high slippage
         _addLiquidity(realPair, 500_000 * 1e18, 5 ether);
         
         vm.prank(owner);
         vaulton.transfer(alice, 200_000 * 1e18);
         
-        // Grosse vente qui créera du slippage
-        uint256 buybackBefore = vaulton.buybackTokensRemaining();
+        // Large sale that will create slippage
+        uint256 buybackBefore = vaulton.getBuybackTokensRemaining();
         
         vm.prank(alice);
-        vaulton.transfer(realPair, 100_000 * 1e18); // 20% de la liquidité
+        vaulton.transfer(realPair, 100_000 * 1e18); // 20% of liquidity
         
-        // Même avec slippage élevé, mécanisme doit fonctionner
-        assertTrue(vaulton.buybackTokensRemaining() <= buybackBefore, "Should handle high slippage");
+        // Even with high slippage, mechanism should work
+        assertTrue(vaulton.getBuybackTokensRemaining() <= buybackBefore, "Should handle high slippage"); // ✅ CORRIGÉ
     }
     
     function testGasConsumptionMainnet() public {
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
         
         address realPair = _createPancakePair();
         vm.prank(owner);
@@ -158,7 +149,7 @@ contract VaultonMainnetForkTest is Test {
         vm.prank(owner);
         vaulton.transfer(alice, 100_000 * 1e18);
         
-        // Mesurer gas pour vente avec auto-sell
+        // Measure gas for sale with auto-sell
         uint256 gasBefore = gasleft();
         
         vm.prank(alice);
@@ -166,7 +157,7 @@ contract VaultonMainnetForkTest is Test {
         
         uint256 gasUsed = gasBefore - gasleft();
         
-        // Vérifier que gas reste raisonnable (< 500k gas)
+        // Check that gas remains reasonable (< 500k gas)
         assertTrue(gasUsed < 500_000, "Gas consumption should be reasonable");
     }
     
@@ -190,7 +181,7 @@ contract VaultonMainnetForkTest is Test {
     }
 }
 
-// Interfaces nécessaires
+// Required interfaces
 interface IUniswapV2Factory {
     function createPair(address tokenA, address tokenB) external returns (address pair);
 }

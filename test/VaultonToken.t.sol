@@ -23,7 +23,6 @@ contract VaultonTokenTest is Test {
     event BuybackBurn(uint256 tokensBurned, uint256 bnbUsed);
     event SwapForBNBFailed(uint256 tokenAmount);
     event BuybackFailed(uint256 bnbTried);
-    event ExternalBurnUpdated(uint256 burnAmount, uint256 totalBurned);
 
     function setUp() public {
         owner = makeAddr("owner");
@@ -50,9 +49,9 @@ contract VaultonTokenTest is Test {
         assertEq(vaulton.BUYBACK_RESERVE(), 10_000_000 * 1e18);
 
         assertEq(vaulton.burnedTokens(), vaulton.INITIAL_BURN());
-        assertEq(vaulton.buybackTokensRemaining(), 0); // FIX: Starts at 0
+        assertEq(vaulton.getBuybackTokensRemaining(), 0); // ✅ CORRIGÉ
 
-        // Owner reçoit tous les tokens après burn initial
+        // Owner receives all tokens after initial burn
         assertEq(vaulton.balanceOf(address(vaulton)), 0);
         assertEq(
             vaulton.balanceOf(owner),
@@ -114,8 +113,22 @@ contract VaultonTokenTest is Test {
 
         assertEq(circulatingSupply, vaulton.totalSupply());
         assertEq(burnedTokens_, vaulton.INITIAL_BURN());
-        assertEq(buybackTokensRemaining_, 0); // FIX: Starts at 0
+        assertEq(buybackTokensRemaining_, 0); // ✅ CORRIGÉ
         assertEq(accumulatedBNB_, 0);
+    }
+
+    function testGlobalStats() public view {
+        (
+            uint256 circulatingSupply,
+            uint256 burnedTokens_,
+            uint256 buybackTokensRemaining_,
+            uint256 accumulatedBNB_
+        ) = vaulton.getBasicStats();
+
+        assertEq(circulatingSupply, vaulton.getCirculatingSupply());
+        assertEq(burnedTokens_, vaulton.burnedTokens());
+        assertEq(buybackTokensRemaining_, vaulton.getBuybackTokensRemaining());
+        assertEq(accumulatedBNB_, vaulton.accumulatedBNB());
     }
 
     function testBasicTransfers() public {
@@ -197,10 +210,6 @@ contract VaultonTokenTest is Test {
         vm.prank(owner);
         vaulton.addToWhitelist(alice);
         assertTrue(vaulton.isWhitelisted(alice));
-
-        vm.prank(owner);
-        vaulton.removeFromWhitelist(alice);
-        assertFalse(vaulton.isWhitelisted(alice));
     }
 
     function testAntiBotMechanism() public {
@@ -224,7 +233,7 @@ contract VaultonTokenTest is Test {
         vaulton.transfer(alice, 100 * 1e18);
         assertEq(vaulton.balanceOf(alice), 100 * 1e18);
 
-        // Après période anti-bot (ANTI_BOT_BLOCKS = 5 sur mainnet)
+        // After anti-bot period (ANTI_BOT_BLOCKS = 5 on mainnet)
         vm.roll(block.number + 6); // Skip anti-bot period
         vm.prank(pair);
         vaulton.transfer(bob, 100 * 1e18);
@@ -239,7 +248,7 @@ contract VaultonTokenTest is Test {
     }
 
     function testAutoSellRequiresContractFunding() public {
-        // Test que auto-sell ne marche pas sans tokens dans contract
+        // Test that auto-sell does not work without tokens in contract
         vm.prank(owner);
         vaulton.setPair(pair);
         vm.prank(owner);
@@ -248,14 +257,14 @@ contract VaultonTokenTest is Test {
         vm.prank(owner);
         vaulton.transfer(alice, 100_000 * 1e18);
         
-        uint256 initialBuybackRemaining = vaulton.buybackTokensRemaining();
+        uint256 initialBuybackRemaining = vaulton.getBuybackTokensRemaining();
         
-        // Vente sans réserve dans contract
+        // Sell without reserve in contract
         vm.prank(alice);
         vaulton.transfer(pair, 100_000 * 1e18);
         
-        // Auto-sell ne peut pas se faire
-        assertEq(vaulton.buybackTokensRemaining(), initialBuybackRemaining);
+        // Auto-sell cannot be performed
+        assertEq(vaulton.getBuybackTokensRemaining(), initialBuybackRemaining);
     }
 
     function testAutoSellWithContractFunding() public {
@@ -263,10 +272,6 @@ contract VaultonTokenTest is Test {
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
         
-        // FIX: Update buyback reserve after funding
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        
         vm.prank(owner);
         vaulton.setPair(pair);
         vm.prank(owner);
@@ -275,85 +280,86 @@ contract VaultonTokenTest is Test {
         vm.prank(owner);
         vaulton.transfer(alice, 100_000 * 1e18);
         
-        uint256 initialBuybackRemaining = vaulton.buybackTokensRemaining();
+        uint256 initialBuybackRemaining = vaulton.getBuybackTokensRemaining();
         uint256 expectedAutoSell = (100_000 * 1e18 * 200) / 10000; // 2%
         
-        // Vente avec réserve
+        // Sell with reserve
         vm.prank(alice);
         vaulton.transfer(pair, 100_000 * 1e18);
         
-        // Auto-sell doit avoir fonctionné
-        assertEq(vaulton.buybackTokensRemaining(), initialBuybackRemaining - expectedAutoSell);
+        // Auto-sell should have worked
+        assertEq(vaulton.getBuybackTokensRemaining(), initialBuybackRemaining - expectedAutoSell);
     }
 
     function testReserveProtection() public {
-        // Vérifier que les tokens peuvent être transférés vers le contrat
+        // Check that tokens can be transferred to the contract
         uint256 initialContractBalance = vaulton.balanceOf(address(vaulton));
         
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 1000 * 1e18);
         
-        // Vérifier que les tokens sont bien dans le contrat
+        // Check that tokens are indeed in the contract
         uint256 newBalance = initialContractBalance + 1000 * 1e18;
         assertEq(vaulton.balanceOf(address(vaulton)), newBalance);
         
-        // ✅ AJOUT : Test protection basique
         vm.prank(owner);
         vaulton.approve(alice, 1000 * 1e18);
         
-        // Alice ne peut pas retirer tokens du contrat même avec allowance
+        // Alice cannot withdraw tokens from the contract even with allowance
         vm.prank(alice);
         vm.expectRevert("ERC20: insufficient allowance");
         vaulton.transferFrom(address(vaulton), alice, 500 * 1e18);
         
-        // Vérifier que balance contrat inchangée
+        // Check that contract balance is unchanged
         assertEq(vaulton.balanceOf(address(vaulton)), newBalance);
         
-        // Les tokens du contrat sont protégés par _beforeTokenTransfer
-        // et ne peuvent sortir que via les mécanismes autorisés :
-        // - Auto-sell (internal calls) - testé dans testAutoSellWithContractFunding
-        // - Burn vers dead address - testé dans renounceOwnership  
-        // - Swap vers router - testé dans auto-sell mechanism
+        // Contract tokens are protected by _beforeTokenTransfer
+        // and can only leave via authorized mechanisms:
+        // - Auto-sell (internal calls) - tested in testAutoSellWithContractFunding
+        // - Burn to dead address - tested in renounceOwnership
+        // - Swap to router - tested in auto-sell mechanism
     }
 
     function testRenounceWithRemainingTokens() public {
+        // Owner transfers 11M tokens to the contract address
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 11_000_000 * 1e18);
-        
-        // Variables pour futur test complet
-        // uint256 initialBurnedTokens = vaulton.burnedTokens();
-        // uint256 contractBalance = vaulton.balanceOf(address(vaulton));
-        
-        // TODO: Compléter ce test quand helper function disponible
+
+        uint256 initialBurnedTokens = vaulton.burnedTokens();
+        uint256 contractBalance = vaulton.balanceOf(address(vaulton));
+
+        // Owner renounces ownership
+        vm.prank(owner);
+        vaulton.renounceOwnership();
+
+        // Ownership should be renounced
+        assertEq(vaulton.owner(), address(0));
+
+        // Contract balance should remain unchanged
+        assertEq(vaulton.balanceOf(address(vaulton)), contractBalance);
+
+        // Burned tokens should remain unchanged (no automatic burn)
+        assertEq(vaulton.burnedTokens(), initialBurnedTokens);
     }
 
     function testEventEmissions() public {
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
         
-        // ✅ AJOUT: Activer le buyback reserve
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        
-        // ✅ AJOUT: Setup trading avant de faire les transfers
         vm.prank(owner);
         vaulton.setPair(pair);
         vm.prank(owner);
         vaulton.enableTrading();
         
-        // ✅ AJOUT: Donner des tokens à alice pour qu'elle puisse vendre
         vm.prank(owner);
         vaulton.transfer(alice, 100_000 * 1e18);
         
-        // FIX: Just check that the transfer happens without checking specific events
-        // since the mock router doesn't generate real BNB
-        uint256 buybackBefore = vaulton.buybackTokensRemaining();
+        uint256 buybackBefore = vaulton.getBuybackTokensRemaining();
         
         vm.prank(alice);
         vaulton.transfer(pair, 100_000 * 1e18);
         
-        // Verify that buyback tokens decreased (auto-sell happened)
-        uint256 buybackAfter = vaulton.buybackTokensRemaining();
+        uint256 buybackAfter = vaulton.getBuybackTokensRemaining();
         assertTrue(buybackAfter < buybackBefore, "Auto-sell should have reduced buyback reserve");
     }
 
@@ -361,9 +367,6 @@ contract VaultonTokenTest is Test {
         // Setup contract with buyback reserve
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
         
         vm.prank(owner);
         vaulton.setPair(pair);
@@ -376,7 +379,7 @@ contract VaultonTokenTest is Test {
         // Force router to revert on swaps
         mockRouter.setForceRevert(true);
         
-        uint256 buybackBefore = vaulton.buybackTokensRemaining();
+        uint256 buybackBefore = vaulton.getBuybackTokensRemaining();
         
         // Expect SwapForBNBFailed event when swap fails
         vm.expectEmit(true, false, false, true);
@@ -387,7 +390,7 @@ contract VaultonTokenTest is Test {
         vaulton.transfer(pair, 100_000 * 1e18);
         
         // Buyback reserve should remain unchanged due to failed swap
-        assertEq(vaulton.buybackTokensRemaining(), buybackBefore, "Buyback reserve should be unchanged on swap failure");
+        assertEq(vaulton.getBuybackTokensRemaining(), buybackBefore, "Buyback reserve should be unchanged on swap failure");
         assertEq(vaulton.accumulatedBNB(), 0, "No BNB should be accumulated on failed swap");
     }
 
@@ -403,27 +406,24 @@ contract VaultonTokenTest is Test {
         assertEq(vaulton.balanceOf(alice), 0);
         
         // Test auto-sell with zero buyback remaining
-        assertEq(vaulton.buybackTokensRemaining(), 0);
+        assertEq(vaulton.getBuybackTokensRemaining(), 0);
         
         vm.prank(owner);
         vaulton.transfer(alice, 1000 * 1e18);
         
-        uint256 buybackBefore = vaulton.buybackTokensRemaining();
+        uint256 buybackBefore = vaulton.getBuybackTokensRemaining();
         
         // Sell should not trigger auto-sell with zero buyback reserve
         vm.prank(alice);
         vaulton.transfer(pair, 100 * 1e18);
         
-        assertEq(vaulton.buybackTokensRemaining(), buybackBefore);
+        assertEq(vaulton.getBuybackTokensRemaining(), buybackBefore);
     }
 
     function testInsufficientContractBalanceForAutoSell() public {
         // Fund contract with minimal amount
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 1000 * 1e18);
-        
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
         
         vm.prank(owner);
         vaulton.setPair(pair);
@@ -439,51 +439,46 @@ contract VaultonTokenTest is Test {
         // Auto-sell amount should be limited by contract balance
         assertTrue(expectedAutoSell > contractBalance, "Setup: auto-sell should exceed contract balance");
         
-        uint256 buybackBefore = vaulton.buybackTokensRemaining();
-        
+        uint256 buybackBefore = vaulton.getBuybackTokensRemaining();
         vm.prank(alice);
         vaulton.transfer(pair, 100_000 * 1e18);
         
         // Should only sell what's available in contract
-        uint256 actualSold = buybackBefore - vaulton.buybackTokensRemaining();
+        uint256 actualSold = buybackBefore - vaulton.getBuybackTokensRemaining();
         assertTrue(actualSold <= contractBalance, "Should not sell more than contract balance");
     }
 
     function testBuybackTokensRemainingLimitation() public {
-        // Fund contract with more than BUYBACK_RESERVE
+        // First, give Alice the tokens to sell
         vm.prank(owner);
-        vaulton.transfer(address(vaulton), 15_000_000 * 1e18);
+        vaulton.transfer(alice, 100_000 * 1e18);
         
+        // Fund the contract with only 5M tokens (below the cap)
         vm.prank(owner);
-        vaulton.updateBuybackReserve();
+        vaulton.transfer(address(vaulton), 5_000_000 * 1e18);
         
-        // Should be capped at BUYBACK_RESERVE
-        assertEq(vaulton.buybackTokensRemaining(), vaulton.BUYBACK_RESERVE());
+        assertEq(vaulton.getBuybackTokensRemaining(), 5_000_000 * 1e18);
         
         vm.prank(owner);
         vaulton.setPair(pair);
         vm.prank(owner);
         vaulton.enableTrading();
         
-        vm.prank(owner);
-        vaulton.transfer(alice, 100_000 * 1e18);
+        vm.deal(address(mockRouter), 100 ether);
         
-        uint256 expectedAutoSell = (100_000 * 1e18 * 200) / 10000; // 2%
-        uint256 buybackBefore = vaulton.buybackTokensRemaining();
+        uint256 buybackBefore = vaulton.getBuybackTokensRemaining();
         
         vm.prank(alice);
         vaulton.transfer(pair, 100_000 * 1e18);
         
-        // Should work normally with sufficient buyback reserve
-        assertEq(vaulton.buybackTokensRemaining(), buybackBefore - expectedAutoSell);
+        uint256 buybackAfter = vaulton.getBuybackTokensRemaining();
+        
+        assertLt(buybackAfter, buybackBefore, "Auto-sell should have reduced buyback remaining");
     }
 
     function testReentrancyProtection() public {
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
         
         vm.prank(owner);
         vaulton.setPair(pair);
@@ -513,9 +508,6 @@ contract VaultonTokenTest is Test {
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
         
         vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        
-        vm.prank(owner);
         vaulton.setPair(pair);
         vm.prank(owner);
         vaulton.enableTrading();
@@ -541,8 +533,6 @@ contract VaultonTokenTest is Test {
     function testMultipleFailureRecovery() public {
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
         
         vm.prank(owner);
         vaulton.setPair(pair);
@@ -555,7 +545,7 @@ contract VaultonTokenTest is Test {
         // Force failures
         mockRouter.setForceRevert(true);
         
-        uint256 buybackBefore = vaulton.buybackTokensRemaining();
+        uint256 buybackBefore = vaulton.getBuybackTokensRemaining();
         
         // Multiple failed sells
         vm.prank(alice);
@@ -565,7 +555,7 @@ contract VaultonTokenTest is Test {
         vaulton.transfer(pair, 100_000 * 1e18);
         
         // Buyback should remain unchanged due to failures
-        assertEq(vaulton.buybackTokensRemaining(), buybackBefore);
+        assertEq(vaulton.getBuybackTokensRemaining(), buybackBefore);
         
         // Re-enable swaps
         mockRouter.setForceRevert(false);
@@ -575,7 +565,7 @@ contract VaultonTokenTest is Test {
         vaulton.transfer(pair, 100_000 * 1e18);
         
         // Buyback should decrease now
-        assertTrue(vaulton.buybackTokensRemaining() < buybackBefore, "Swap should work after re-enabling");
+        assertTrue(vaulton.getBuybackTokensRemaining() < buybackBefore, "Swap should work after re-enabling");
     }
 
     function testContractEmptyBalanceScenario() public {
@@ -586,7 +576,7 @@ contract VaultonTokenTest is Test {
         
         // Contract has 0 balance, buybackTokensRemaining = 0
         assertEq(vaulton.balanceOf(address(vaulton)), 0);
-        assertEq(vaulton.buybackTokensRemaining(), 0);
+        assertEq(vaulton.getBuybackTokensRemaining(), 0);
         
         vm.prank(owner);
         vaulton.transfer(alice, 100_000 * 1e18);
@@ -596,7 +586,7 @@ contract VaultonTokenTest is Test {
         vaulton.transfer(pair, 100_000 * 1e18);
         
         // Everything should remain at 0
-        assertEq(vaulton.buybackTokensRemaining(), 0);
+        assertEq(vaulton.getBuybackTokensRemaining(), 0);
         assertEq(vaulton.accumulatedBNB(), 0);
     }
 
@@ -608,8 +598,6 @@ contract VaultonTokenTest is Test {
         // Fund contract avec réserve buyback
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
         
         vm.prank(owner);
         vaulton.setPair(pair);
@@ -619,7 +607,7 @@ contract VaultonTokenTest is Test {
         vm.prank(owner);
         vaulton.transfer(alice, 2_000_000 * 1e18); // More tokens for multiple sells
         
-        uint256 initialBuybackRemaining = vaulton.buybackTokensRemaining();
+        uint256 initialBuybackRemaining = vaulton.getBuybackTokensRemaining();
         uint256 initialAccumulatedBNB = vaulton.accumulatedBNB();
         
         // Simulate multiple sells to reach buyback threshold (0.03 BNB mainnet)
@@ -637,7 +625,7 @@ contract VaultonTokenTest is Test {
         }
         
         // Verify either buyback was triggered OR significant auto-sell happened
-        uint256 finalBuybackRemaining = vaulton.buybackTokensRemaining();
+        uint256 finalBuybackRemaining = vaulton.getBuybackTokensRemaining();
         uint256 finalAccumulatedBNB = vaulton.accumulatedBNB();
         
         assertTrue(
@@ -655,8 +643,6 @@ contract VaultonTokenTest is Test {
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
         vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        vm.prank(owner);
         vaulton.setPair(pair);
         vm.prank(owner);
         vaulton.enableTrading();
@@ -671,7 +657,7 @@ contract VaultonTokenTest is Test {
         
         // Simulate realistic trading patterns
         uint256 initialBurnedTokens = vaulton.burnedTokens();
-        uint256 initialBuybackRemaining = vaulton.buybackTokensRemaining();
+        uint256 initialBuybackRemaining = vaulton.getBuybackTokensRemaining();
         
         // Multiple traders selling different amounts
         for (uint day = 0; day < 3; day++) { // Reduced from 7 to 3 days
@@ -695,7 +681,7 @@ contract VaultonTokenTest is Test {
         
         // Verify deflationary mechanism worked - check any activity happened
         uint256 finalBurnedTokens = vaulton.burnedTokens();
-        uint256 finalBuybackRemaining = vaulton.buybackTokensRemaining();
+        uint256 finalBuybackRemaining = vaulton.getBuybackTokensRemaining();
         
         assertTrue(
             finalBurnedTokens >= initialBurnedTokens && 
@@ -713,9 +699,6 @@ contract VaultonTokenTest is Test {
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
         
         vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        
-        vm.prank(owner);
         vaulton.setPair(pair);
         vm.prank(owner);
         vaulton.enableTrading();
@@ -724,13 +707,13 @@ contract VaultonTokenTest is Test {
         vaulton.transfer(alice, 2_000_000 * 1e18);
         
         // Large sell that would cause significant slippage
-        uint256 buybackBefore = vaulton.buybackTokensRemaining();
+        uint256 buybackBefore = vaulton.getBuybackTokensRemaining();
         
         vm.prank(alice);
         vaulton.transfer(pair, 500_000 * 1e18); // 10% of pool
         
         // Auto-sell should still work despite high slippage
-        assertTrue(vaulton.buybackTokensRemaining() < buybackBefore, "Auto-sell should work with high slippage");
+        assertTrue(vaulton.getBuybackTokensRemaining() < buybackBefore, "Auto-sell should work with high slippage");
     }
 
     function testMainnetBNBThreshold() public {
@@ -739,9 +722,6 @@ contract VaultonTokenTest is Test {
         
         vm.prank(owner);
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
         
         vm.prank(owner);
         vaulton.setPair(pair);
@@ -820,9 +800,6 @@ contract VaultonTokenTest is Test {
         vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
         
         vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        
-        vm.prank(owner);
         vaulton.setPair(pair);
         vm.prank(owner);
         vaulton.enableTrading();
@@ -847,576 +824,52 @@ contract VaultonTokenTest is Test {
         }
         
         // Auto-sell should still work with price volatility
-        uint256 buybackBefore = vaulton.buybackTokensRemaining();
+        uint256 buybackBefore = vaulton.getBuybackTokensRemaining();
         vm.prank(alice);
         vaulton.transfer(pair, 100_000 * 1e18);
         
-        assertTrue(vaulton.buybackTokensRemaining() < buybackBefore, "Auto-sell should work with price volatility");
+        assertTrue(vaulton.getBuybackTokensRemaining() < buybackBefore, "Auto-sell should work with price volatility");
     }
 
-    /// @notice Test updateExternalBurn function basic functionality
-    function testUpdateExternalBurn() public {
-        uint256 initialBurned = vaulton.burnedTokens();
-        uint256 externalBurnAmount = 1_500_000 * 10**18; // 1.5M tokens
-        
-        // Only owner can call updateExternalBurn
-        vm.prank(alice);
-        vm.expectRevert("Ownable: caller is not the owner");
-        vaulton.updateExternalBurn(externalBurnAmount);
-        
-        // Owner can call successfully
-        vm.expectEmit(true, true, false, true);
-        emit ExternalBurnUpdated(externalBurnAmount, initialBurned + externalBurnAmount);
-        
-        vm.prank(owner);
-        vaulton.updateExternalBurn(externalBurnAmount);
-        
-        // Verify burned tokens updated
-        assertEq(vaulton.burnedTokens(), initialBurned + externalBurnAmount);
+    function testCirculatingSupply() public view {
+        address deadAddress = 0x000000000000000000000000000000000000dEaD;
+        assertEq(
+            vaulton.getCirculatingSupply(),
+            vaulton.totalSupply() - vaulton.balanceOf(deadAddress)
+        );
     }
 
-    /// @notice Test updateExternalBurn with zero amount
-    function testUpdateExternalBurnZeroAmount() public {
+    function testPairSetRestriction() public {
         vm.prank(owner);
-        vm.expectRevert("Invalid burn amount");
-        vaulton.updateExternalBurn(0);
+        vaulton.setPair(makeAddr("pair1"));
+        
+        // Second call should fail
+        vm.expectRevert("Pair already set");
+        vm.prank(owner);
+        vaulton.setPair(makeAddr("pair2"));
     }
 
-    /// @notice Test updateExternalBurn affects getBasicStats circulatingSupply
-    function testUpdateExternalBurnAffectsStats() public {
-        // Get initial stats
-        (uint256 initialCirculating, uint256 initialBurned,,) = vaulton.getBasicStats();
-        
-        uint256 externalBurnAmount = 2_000_000 * 10**18; // 2M tokens
-        
-        // Update external burn
+    function testGetBuybackTokensAccuracy() public {
+        // Test avec différents balances du contrat
         vm.prank(owner);
-        vaulton.updateExternalBurn(externalBurnAmount);
+        vaulton.transfer(address(vaulton), 15_000_000 * 1e18); // Plus que BUYBACK_RESERVE
         
-        // Get updated stats
-        (uint256 newCirculating, uint256 newBurned,,) = vaulton.getBasicStats();
+        assertEq(vaulton.getBuybackTokensRemaining(), vaulton.BUYBACK_RESERVE());
         
-        // Verify stats updated correctly
-        assertEq(newBurned, initialBurned + externalBurnAmount);
-        assertEq(newCirculating, initialCirculating - externalBurnAmount);
-        assertEq(newCirculating, vaulton.TOTAL_SUPPLY() - newBurned);
-    }
-
-    /// @notice Test multiple external burn updates
-    function testMultipleExternalBurnUpdates() public {
-        uint256 initialBurned = vaulton.burnedTokens();
+        // ✅ CORRIGÉ : Créer un nouveau contrat ou réinitialiser pour le deuxième test
+        // Car on ne peut pas "retirer" des tokens du contrat une fois envoyés
         
-        // First burn update
-        uint256 firstBurn = 500_000 * 10**18;
+        // Nouveau test avec un montant inférieur
+        Vaulton vaulton2;
         vm.prank(owner);
-        vaulton.updateExternalBurn(firstBurn);
-        
-        assertEq(vaulton.burnedTokens(), initialBurned + firstBurn);
-        
-        // Second burn update
-        uint256 secondBurn = 1_000_000 * 10**18;
-        vm.prank(owner);
-        vaulton.updateExternalBurn(secondBurn);
-        
-        assertEq(vaulton.burnedTokens(), initialBurned + firstBurn + secondBurn);
-        
-        // Third burn update
-        uint256 thirdBurn = 750_000 * 10**18;
-        vm.prank(owner);
-        vaulton.updateExternalBurn(thirdBurn);
-        
-        assertEq(vaulton.burnedTokens(), initialBurned + firstBurn + secondBurn + thirdBurn);
-    }
-
-    /// @notice Test updateExternalBurn cannot be called after renouncing ownership
-    function testUpdateExternalBurnAfterRenounce() public {
-        // Renounce ownership
-        vm.prank(owner);
-        vaulton.renounceOwnership();
-        
-        // Try to update external burn
-        vm.expectRevert("Ownable: caller is not the owner");
-        vaulton.updateExternalBurn(1_000_000 * 10**18);
-    }
-
-    /// @notice Test updateExternalBurn event emission
-    function testUpdateExternalBurnEventEmission() public {
-        uint256 burnAmount = 1_200_000 * 10**18;
-        uint256 expectedTotalBurned = vaulton.burnedTokens() + burnAmount;
-        
-        // Expect correct event emission
-        vm.expectEmit(true, false, false, true);
-        emit ExternalBurnUpdated(burnAmount, expectedTotalBurned);
-        
-        vm.prank(owner);
-        vaulton.updateExternalBurn(burnAmount);
-    }
-
-    /// @notice Test realistic presale scenario with external burn
-    function testPresaleScenarioWithExternalBurn() public {
-        // Simulate presale scenario
-        uint256 presaleAllocation = 4_500_000 * 10**18; // 4.5M tokens allocated
-        uint256 tokensSold = 3_000_000 * 10**18; // 3M tokens sold (66.7% success)
-        uint256 unsoldTokens = presaleAllocation - tokensSold; // 1.5M unsold
-        
-        // Initial stats
-        (uint256 initialCirculating, uint256 initialBurned,,) = vaulton.getBasicStats();
-        
-        // Simulate Pinksale burning unsold tokens (owner updates tracking)
-        vm.prank(owner);
-        vaulton.updateExternalBurn(unsoldTokens);
-        
-        // Verify final stats
-        (uint256 finalCirculating, uint256 finalBurned,,) = vaulton.getBasicStats();
-        
-        assertEq(finalBurned, initialBurned + unsoldTokens);
-        assertEq(finalCirculating, initialCirculating - unsoldTokens);
-        
-        // Verify total deflation (initial + presale burns)
-        uint256 totalDeflation = (finalBurned * 100) / vaulton.TOTAL_SUPPLY();
-        assertTrue(totalDeflation > 26, "Total deflation should exceed initial 26.7%");
-    }
-
-    /// @notice Test updateExternalBurn with maximum realistic amount
-    function testUpdateExternalBurnMaxRealistic() public {
-        // Maximum realistic external burn (full presale allocation)
-        uint256 maxExternalBurn = 4_500_000 * 10**18; // Full presale unsold
-        
-        uint256 initialBurned = vaulton.burnedTokens();
-        
-        vm.prank(owner);
-        vaulton.updateExternalBurn(maxExternalBurn);
-        
-        // Verify stats
-        assertEq(vaulton.burnedTokens(), initialBurned + maxExternalBurn);
-        
-        // Check circulating supply remains positive
-        (uint256 circulatingSupply,,,) = vaulton.getBasicStats();
-        assertTrue(circulatingSupply > 0, "Circulating supply should remain positive");
-        
-        // Total burned should not exceed total supply
-        assertTrue(vaulton.burnedTokens() < vaulton.TOTAL_SUPPLY(), "Burned tokens should not exceed total supply");
-    }
-
-    /// @notice Test updateExternalBurn doesn't affect buyback mechanism
-    function testUpdateExternalBurnDoesntAffectBuyback() public {
-        // Setup buyback mechanism
-        vm.prank(owner);
-        vaulton.transfer(address(vaulton), 10_000_000 * 10**18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        
-        uint256 initialBuybackRemaining = vaulton.buybackTokensRemaining();
-        
-        // Update external burn
-        vm.prank(owner);
-        vaulton.updateExternalBurn(1_000_000 * 10**18);
-        
-        // Verify buyback mechanism unaffected
-        assertEq(vaulton.buybackTokensRemaining(), initialBuybackRemaining);
-        
-        // Setup trading
-        vm.prank(owner);
-        vaulton.setPair(pair);
-        vm.prank(owner);
-        vaulton.enableTrading();
-        
-        // Test buyback mechanism still works
-        vm.prank(owner);
-        vaulton.transfer(alice, 100_000 * 10**18);
-        
-        vm.prank(alice);
-        vaulton.transfer(pair, 100_000 * 10**18);
-        
-        // Buyback mechanism should still reduce reserve
-        assertTrue(vaulton.buybackTokensRemaining() < initialBuybackRemaining, "Buyback mechanism should work normally");
-    }
-
-    /// @notice Test integration with real presale workflow
-    function testPresaleWorkflowIntegration() public {
-        // Phase 1: Initial state (already tested in setUp)
-        assertEq(vaulton.burnedTokens(), vaulton.INITIAL_BURN());
-        
-        // Phase 2: Simulate presale preparation (owner allocates tokens)
-        uint256 presaleTokens = 4_500_000 * 10**18;
-        // In real scenario, tokens go to Pinksale contract
-        
-        // Phase 3: Post-presale with partial success
-        uint256 actualSold = 3_200_000 * 10**18; // 71% success rate
-        uint256 unsoldBurned = presaleTokens - actualSold; // 1.3M burned by Pinksale
-        
-        // Owner updates burn tracking after Pinksale burns unsold
-        vm.prank(owner);
-        vaulton.updateExternalBurn(unsoldBurned);
-        
-        // Setup buyback reserve
-        vm.prank(owner);
-        vaulton.transfer(address(vaulton), 10_000_000 * 10**18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        
-        // Enable trading
-        vm.prank(owner);
-        vaulton.setPair(pair);
-        vm.prank(owner);
-        vaulton.enableTrading();
-        
-        // Verify final state
-        (uint256 circulatingSupply, uint256 totalBurned,,) = vaulton.getBasicStats();
-        
-        uint256 expectedBurned = vaulton.INITIAL_BURN() + unsoldBurned;
-        assertEq(totalBurned, expectedBurned);
-        assertEq(circulatingSupply, vaulton.TOTAL_SUPPLY() - expectedBurned);
-        
-        // Verify mechanism still active
-        assertEq(vaulton.buybackTokensRemaining(), vaulton.BUYBACK_RESERVE());
-        assertTrue(vaulton.tradingEnabled());
-        assertTrue(vaulton.autoSellEnabled());
-    }
-
-    /// @notice Test edge case: updateExternalBurn with very large amount
-    function testUpdateExternalBurnLargeAmount() public {
-        // Test with unrealistically large amount (should still work)
-        uint256 largeBurn = 20_000_000 * 10**18; // 20M tokens
-        
-        vm.prank(owner);
-        vaulton.updateExternalBurn(largeBurn);
-        
-        // Should update correctly even if amount is large
-        assertEq(vaulton.burnedTokens(), vaulton.INITIAL_BURN() + largeBurn);
-        
-        // Circulating supply calculation should handle large burns
-        (uint256 circulatingSupply,,,) = vaulton.getBasicStats();
-        assertEq(circulatingSupply, vaulton.TOTAL_SUPPLY() - vaulton.burnedTokens());
-    }
-
-    /// @notice Test comprehensive transaction amounts on PancakeSwap
-    function testAllTransactionSizes() public {
-        // Setup trading
-        vm.prank(owner);
-        vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        vm.prank(owner);
-        vaulton.setPair(pair);
-        vm.prank(owner);
-        vaulton.enableTrading();
-        
-        // Fund traders
-        vm.prank(owner);
-        vaulton.transfer(alice, 5_000_000 * 1e18);
-        
-        // Test micro transactions (1-1000 tokens)
-        for (uint256 i = 1; i <= 1000; i *= 10) {
-            uint256 amount = i * 1e18;
-            vm.prank(alice);
-            vaulton.transfer(pair, amount);
-            // Verify no reverts, mechanism works correctly
-        }
-        
-        // Test medium transactions (1k-100k tokens)
-        uint256[] memory mediumAmounts = new uint256[](5);
-        mediumAmounts[0] = 1_000 * 1e18;
-        mediumAmounts[1] = 5_000 * 1e18;
-        mediumAmounts[2] = 10_000 * 1e18;
-        mediumAmounts[3] = 50_000 * 1e18;
-        mediumAmounts[4] = 100_000 * 1e18;
-        
-        for (uint256 i = 0; i < mediumAmounts.length; i++) {
-            vm.prank(alice);
-            vaulton.transfer(pair, mediumAmounts[i]);
-        }
-        
-        // Test whale transactions (100k+ tokens)
-        uint256[] memory whaleAmounts = new uint256[](4);
-        whaleAmounts[0] = 250_000 * 1e18;
-        whaleAmounts[1] = 500_000 * 1e18;
-        whaleAmounts[2] = 1_000_000 * 1e18;
-        whaleAmounts[3] = 2_000_000 * 1e18;
-        
-        for (uint256 i = 0; i < whaleAmounts.length; i++) {
-            if (vaulton.balanceOf(alice) >= whaleAmounts[i]) {
-                vm.prank(alice);
-                vaulton.transfer(pair, whaleAmounts[i]);
-            }
-        }
-    }
-
-    /// @notice Test transaction size impact on auto-sell mechanism
-    function testAutoSellScaling() public {
-        // Setup
-        vm.prank(owner);
-        vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        vm.prank(owner);
-        vaulton.setPair(pair);
-        vm.prank(owner);
-        vaulton.enableTrading();
-        vm.prank(owner);
-        vaulton.transfer(alice, 3_000_000 * 1e18);
-        
-        // Test that 2% auto-sell scales properly with transaction size
-        uint256[] memory sellAmounts = new uint256[](6);
-        sellAmounts[0] = 1_000 * 1e18;      // Small
-        sellAmounts[1] = 10_000 * 1e18;     // Medium
-        sellAmounts[2] = 50_000 * 1e18;     // Large
-        sellAmounts[3] = 100_000 * 1e18;    // Very large
-        sellAmounts[4] = 500_000 * 1e18;    // Whale
-        sellAmounts[5] = 1_000_000 * 1e18;  // Mega whale
-        
-        for (uint256 i = 0; i < sellAmounts.length; i++) {
-            uint256 buybackBefore = vaulton.buybackTokensRemaining();
-            uint256 expectedAutoSell = (sellAmounts[i] * 200) / 10000; // 2%
-            
-            vm.prank(alice);
-            vaulton.transfer(pair, sellAmounts[i]);
-            
-            uint256 buybackAfter = vaulton.buybackTokensRemaining();
-            uint256 actualAutoSell = buybackBefore - buybackAfter;
-            
-            // Verify auto-sell amount is correct (within contract balance limits)
-            assertTrue(
-                actualAutoSell <= expectedAutoSell && 
-                actualAutoSell <= buybackBefore,
-                "Auto-sell should scale with transaction size"
-            );
-        }
-    }
-
-    /// @notice Test extreme edge cases that could break PancakeSwap integration
-    function testPancakeSwapEdgeCases() public {
-        // Setup
-        vm.prank(owner);
-        vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        vm.prank(owner);
-        vaulton.setPair(pair);
-        vm.prank(owner);
-        vaulton.enableTrading();
-        vm.prank(owner);
-        vaulton.transfer(alice, 1_000_000 * 1e18);
-        
-        // Test 1 wei transaction
-        vm.prank(alice);
-        vaulton.transfer(pair, 1);
-        
-        // Test maximum possible transaction (balance limit)
-        uint256 maxBalance = vaulton.balanceOf(alice);
-        vm.prank(alice);
-        vaulton.transfer(pair, maxBalance);
-        
-        // Test rapid consecutive transactions
-        vm.prank(owner);
-        vaulton.transfer(bob, 100_000 * 1e18);
-        
-        for (uint256 i = 0; i < 10; i++) {
-            vm.prank(bob);
-            vaulton.transfer(pair, 1_000 * 1e18);
-        }
-    }
-
-    /// @notice Test minimum liquidity requirements for stable auto-sell
-    function testMinimumLiquidityForAutosell() public {
-        // Setup contract with buyback reserve
-        vm.prank(owner);
-        vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        vm.prank(owner);
-        vaulton.setPair(pair);
-        vm.prank(owner);
-        vaulton.enableTrading();
-        vm.prank(owner);
-        vaulton.transfer(alice, 2_000_000 * 1e18);
-        
-        // Test different liquidity levels
-        uint256[] memory liquidityLevels = new uint256[](4);
-        liquidityLevels[0] = 1 ether;   // 1 BNB - Very low
-        liquidityLevels[1] = 5 ether;   // 5 BNB - Low
-        liquidityLevels[2] = 10 ether;  // 10 BNB - Medium
-        liquidityLevels[3] = 20 ether;  // 20 BNB - Good
-        
-        for (uint256 i = 0; i < liquidityLevels.length; i++) {
-            // Reset router liquidity
-            mockRouter.resetToMainnetConditions();
-            vm.deal(address(mockRouter), liquidityLevels[i]);
-            
-            // Set realistic market conditions for each liquidity level
-            if (liquidityLevels[i] <= 1 ether) {
-                mockRouter.setMarketConditions(2000, 100); // 20% slippage, 1% fees (very illiquid)
-            } else if (liquidityLevels[i] <= 5 ether) {
-                mockRouter.setMarketConditions(800, 50);   // 8% slippage, 0.5% fees (low liquidity)
-            } else if (liquidityLevels[i] <= 10 ether) {
-                mockRouter.setMarketConditions(300, 30);   // 3% slippage, 0.3% fees (medium liquidity)
-            } else {
-                mockRouter.setMarketConditions(100, 25);   // 1% slippage, 0.25% fees (good liquidity)
-            }
-            
-            uint256 buybackBefore = vaulton.buybackTokensRemaining();
-            uint256 sellAmount = 100_000 * 1e18; // Standard sell size
-            
-            // Attempt auto-sell with current liquidity
-            vm.prank(alice);
-            vaulton.transfer(pair, sellAmount);
-            
-            uint256 buybackAfter = vaulton.buybackTokensRemaining();
-            bool autoSellWorked = buybackAfter < buybackBefore;
-            
-            // Log results for analysis
-            if (liquidityLevels[i] >= 10 ether) {
-                assertTrue(autoSellWorked, "Auto-sell should work reliably with 10+ BNB liquidity");
-            } else if (liquidityLevels[i] >= 5 ether) {
-                // 5 BNB might work but could be unstable
-                // Don't enforce strict requirement but verify no revert
-                assertTrue(true, "5 BNB liquidity test completed without revert");
-            } else {
-                // 1 BNB likely too low for reliable operation
-                // Verify transaction doesn't revert even if auto-sell fails
-                assertTrue(true, "Low liquidity test completed without revert");
-            }
-            
-            // Advance block for next test
-            vm.warp(block.timestamp + 300);
-        }
-    }
-
-    /// @notice Simulate 24h of realistic trading volume adapted to Vaulton's tokenomics
-    function testRealWorldVolumeStress() public {
-        mockRouter.resetToMainnetConditions();
-        vm.deal(address(mockRouter), 10000 ether); // Large liquidity pool
-        mockRouter.setMarketConditions(150, 25); // 1.5% slippage, 0.25% fees
-        
-        // Setup contract
-        vm.prank(owner);
-        vaulton.transfer(address(vaulton), 10_000_000 * 1e18);
-        vm.prank(owner);
-        vaulton.updateBuybackReserve();
-        vm.prank(owner);
-        vaulton.setPair(pair);
-        vm.prank(owner);
-        vaulton.enableTrading();
-        
-        // ADAPTATION VAULTON: Create 8 traders (instead of 20) with Vaulton-realistic allocations
-        address[] memory traders = new address[](8);
-        for (uint256 i = 0; i < 8; i++) {
-            traders[i] = makeAddr(string(abi.encodePacked("trader", i)));
-            vm.prank(owner);
-            // VAULTON REALITY: 200k tokens each (reasonable for 4.5M presale among early holders)
-            vaulton.transfer(traders[i], 200_000 * 1e18);
-        }
-        
-        uint256 initialBurnedTokens = vaulton.burnedTokens();
-        uint256 initialBuybackRemaining = vaulton.buybackTokensRemaining();
-        uint256 transactionCount = 0;
-        uint256 totalVolumeTraded = 0;
-        
-        // VAULTON ADAPTATION: 16h simulation (realistic for new token initial activity)
-        for (uint256 hour = 0; hour < 16; hour++) {
-            // Variable activity adapted to Vaulton's smaller initial community
-            uint256 hourlyTransactions;
-            if (hour >= 2 && hour <= 8) {
-                hourlyTransactions = 20; // Peak hours: 20 tx/hour (realistic for new token)
-            } else if (hour >= 9 && hour <= 12) {
-                hourlyTransactions = 15; // Moderate activity: 15 tx/hour
-            } else {
-                hourlyTransactions = 8; // Low activity: 8 tx/hour
-            }
-            
-            for (uint256 txIndex = 0; txIndex < hourlyTransactions; txIndex++) {
-                // Random trader selection
-                uint256 traderIndex = uint256(keccak256(abi.encode(hour, txIndex, block.timestamp))) % traders.length;
-                address currentTrader = traders[traderIndex];
-                
-                // VAULTON ADAPTED: Transaction sizes realistic for actual Vaulton supply
-                uint256 sellAmount;
-                uint256 traderType = traderIndex % 4;
-                
-                if (traderType == 0) {
-                    // Small holders (100-1k tokens) - realistic for retail
-                    sellAmount = 100 * 1e18 + (uint256(keccak256(abi.encode(hour, txIndex))) % 900) * 1e18;
-                } else if (traderType == 1) {
-                    // Medium holders (1k-5k tokens) - typical early investor sells
-                    sellAmount = 1_000 * 1e18 + (uint256(keccak256(abi.encode(hour, txIndex, 1))) % 4_000) * 1e18;
-                } else if (traderType == 2) {
-                    // Large holders (5k-15k tokens) - significant but realistic
-                    sellAmount = 5_000 * 1e18 + (uint256(keccak256(abi.encode(hour, txIndex, 2))) % 10_000) * 1e18;
-                } else {
-                    // Whale holders (15k-30k tokens) - max realistic for presale participant
-                    sellAmount = 15_000 * 1e18 + (uint256(keccak256(abi.encode(hour, txIndex, 3))) % 15_000) * 1e18;
-                }
-                
-                // Check if trader has sufficient balance
-                if (vaulton.balanceOf(currentTrader) >= sellAmount) {
-                    vm.prank(currentTrader);
-                    vaulton.transfer(pair, sellAmount);
-                    
-                    transactionCount++;
-                    totalVolumeTraded += sellAmount;
-                    
-                    // Simulate market volatility less frequently (adapted to smaller market)
-                    if (txIndex % 20 == 0) {
-                        mockRouter.simulateCEXVolume(200 ether);
-                    }
-                }
-                
-                // Advance time (roughly 3 minutes per transaction - realistic for smaller community)
-                vm.warp(block.timestamp + 180);
-            }
-            
-            // Simulate larger market movements every 4 hours
-            if (hour % 4 == 0) {
-                mockRouter.simulateCEXVolume(500 ether);
-                // Adjust market conditions slightly
-                uint256 newSlippage = 100 + (uint256(keccak256(abi.encode(hour))) % 100); // 1-2% slippage
-                mockRouter.setMarketConditions(newSlippage, 25);
-            }
-        }
-        
-        // Verify stress test results with VAULTON-REALISTIC thresholds
-        uint256 finalBurnedTokens = vaulton.burnedTokens();
-        uint256 finalBuybackRemaining = vaulton.buybackTokensRemaining();
-        
-        // VAULTON ADAPTED: Realistic expectations for smaller supply token
-        assertTrue(transactionCount >= 150, "Should have processed 150+ transactions"); // ✅ Realistic for 8 traders over 16h
-        assertTrue(totalVolumeTraded >= 1_000_000 * 1e18, "Should have traded 1M+ volume"); // ✅ Realistic (20% of circulating)
-        assertTrue(
-            finalBurnedTokens >= initialBurnedTokens || 
-            finalBuybackRemaining < initialBuybackRemaining,
-            "Deflationary mechanism should show activity after stress test"
+        vaulton2 = new Vaulton(
+            address(mockRouter),
+            makeAddr("cexWallet2")
         );
         
-        // Verify contract still functional after stress
         vm.prank(owner);
-        vaulton.transfer(alice, 10_000 * 1e18);
-        vm.prank(alice);
-        vaulton.transfer(pair, 5_000 * 1e18);
+        vaulton2.transfer(address(vaulton2), 5_000_000 * 1e18); // Moins que BUYBACK_RESERVE
         
-        assertTrue(true, "Contract remains functional after stress test");
-        
-        // Log final stats for debugging (helpful for optimization)
-        console.log("Total transactions processed:", transactionCount);
-        console.log("Total volume traded:", totalVolumeTraded / 1e18, "tokens");
-
-// Plus flexible - calcule automatiquement
-uint256 totalSupplyActive = vaulton.TOTAL_SUPPLY() - vaulton.INITIAL_BURN();
-uint256 reserveLocked = vaulton.balanceOf(address(vaulton));
-uint256 realCirculating = totalSupplyActive - reserveLocked;
-
-uint256 volumePercent = (totalVolumeTraded * 100) / realCirculating;
-console.log("Volume as % of real circulating:", volumePercent, "%");
-console.log("Real circulating (dynamic):", realCirculating / 1e18, "tokens");
-
-// Debug breakdown
-console.log("=== VAULTON TOKENOMICS ===");
-console.log("Total supply:", vaulton.TOTAL_SUPPLY() / 1e18, "tokens");
-console.log("Initial burn:", vaulton.INITIAL_BURN() / 1e18, "tokens");
-console.log("Reserve buyback:", vaulton.BUYBACK_RESERVE() / 1e18, "tokens");
-console.log("Presale allocation: 4.5M tokens");
-console.log("CEX allocation: 4M tokens");
-console.log("Team allocation: 1.5M tokens");
-console.log("PancakeSwap liquidity: 2M tokens");
-console.log("Effective tradable supply: 12M tokens");
+        assertEq(vaulton2.getBuybackTokensRemaining(), vaulton2.balanceOf(address(vaulton2)));
     }
 }

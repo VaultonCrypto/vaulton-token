@@ -10,8 +10,8 @@
 ---
 
 ## Executive Summary
-- **Total Issues Found**: 9
-- **Reentrancy Issues**: 8 (Medium severity)
+- **Total Issues Found**: 8
+- **Reentrancy Issues**: 7 (Medium severity)
 - **Version Issues**: 1 (Low severity)
 - **Critical Issues**: 0
 - **High Severity Issues**: 0
@@ -22,31 +22,44 @@
 
 ### 1. Reentrancy Vulnerabilities (Medium)
 
-#### Issue 1.1: _progressiveSellForBNB State Modification
-**Location**: `src/VaultonToken.sol#262-281`  
+#### Issue 1.1: _progressiveSellForBNB BNB Accumulation
+**Location**: `src/VaultonToken.sol#245-261`  
 **Type**: Reentrancy-write  
-**Description**: State variable `buybackTokensRemaining` modified after external call to PancakeSwap router.
+**Description**: State variable `accumulatedBNB` modified after external call to PancakeSwap router.
 
 **Affected Functions:**
 - `_progressiveSellForBNB(uint256)`
 - `_transfer(address,address,uint256)`
-- `updateBuybackReserve()`
-- `getBasicStats()`
+- `_triggerBuybackAndBurn()`
 
 **Mitigation**: Protected by `ReentrancyGuard` modifier on `_transfer()` function.
 
-#### Issue 1.2: _progressiveSellForBNB BNB Accumulation
-**Location**: `src/VaultonToken.sol#262-281`  
-**Type**: Reentrancy-write  
-**Description**: State variable `accumulatedBNB` modified after external call.
-
-**Mitigation**: Same as above - ReentrancyGuard protection in place.
-
-#### Issue 1.3-1.6: Additional Reentrancy Events
+#### Issue 1.2: _progressiveSellForBNB Event Emission
+**Location**: `src/VaultonToken.sol#245-261`  
 **Type**: Reentrancy-events  
-**Description**: Events emitted after external calls in buyback mechanism.
+**Description**: Event emitted after external call.
 
-**Assessment**: Low risk - events don't affect contract state or user funds.
+**Assessment**: Low risk - events do not affect contract state or user funds.
+
+#### Issue 1.3: _swapTokensForBNB Event Emission
+**Location**: `src/VaultonToken.sol#313-328`  
+**Type**: Reentrancy-events  
+**Description**: Event emitted after external call.
+
+#### Issue 1.4: _transfer State Modification and Event Emission
+**Location**: `src/VaultonToken.sol#186-243`  
+**Type**: Reentrancy-write/events  
+**Description**: State variables and events modified/emitted after external calls.
+
+#### Issue 1.5: _triggerBuybackAndBurn State Modification and Event Emission
+**Location**: `src/VaultonToken.sol#264-310`  
+**Type**: Reentrancy-write/events  
+**Description**: State variables and events modified/emitted after external calls.
+
+**Assessment for all above**:  
+- All critical functions are protected by `ReentrancyGuard`.
+- External calls are limited to trusted PancakeSwap router.
+- No user funds are at risk; only internal tracking variables affected.
 
 ### 2. Solidity Version Differences (Low)
 **Description**: Multiple Solidity versions used across dependencies:
@@ -88,77 +101,62 @@ The contract demonstrates **good security practices** with appropriate reentranc
 'forge config --json' running
 'forge build --build-info --skip */test/** */script/** --force' running (wd: C:\Users\nicol\Vaulton)
 INFO:Detectors:
-Reentrancy in Vaulton._progressiveSellForBNB(uint256) (src/VaultonToken.sol#262-281):
+Reentrancy in Vaulton._progressiveSellForBNB(uint256) (src/VaultonToken.sol#245-261):
         External calls:
-        - _swapTokensForBNB(sellAmount) (src/VaultonToken.sol#270)
-                - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#339-347)
+        - _swapTokensForBNB(sellAmount) (src/VaultonToken.sol#254)
+                - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#320-328)
         State variables written after the call(s):
-        - buybackTokensRemaining -= sellAmount (src/VaultonToken.sol#275)
-        Vaulton.buybackTokensRemaining (src/VaultonToken.sol#54) can be used in cross function reentrancies:
-        - Vaulton._progressiveSellForBNB(uint256) (src/VaultonToken.sol#262-281)
-        - Vaulton._transfer(address,address,uint256) (src/VaultonToken.sol#205-260)
-        - Vaulton.buybackTokensRemaining (src/VaultonToken.sol#54)
-        - Vaulton.constructor(address,address) (src/VaultonToken.sol#112-136)
-        - Vaulton.getBasicStats() (src/VaultonToken.sol#361-365)
-        - Vaulton.updateBuybackReserve() (src/VaultonToken.sol#173-177)
-Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-1
-INFO:Detectors:
-Reentrancy in Vaulton._progressiveSellForBNB(uint256) (src/VaultonToken.sol#262-281):
+        - accumulatedBNB += bnbReceived (src/VaultonToken.sol#259)
+Reentrancy in Vaulton._transfer(address,address,uint256) (src/VaultonToken.sol#186-243):
         External calls:
-        - _swapTokensForBNB(sellAmount) (src/VaultonToken.sol#270)
-                - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#339-347)
-        State variables written after the call(s):
-        - accumulatedBNB += bnbReceived (src/VaultonToken.sol#276)
-Reentrancy in Vaulton._transfer(address,address,uint256) (src/VaultonToken.sol#205-260):
-        External calls:
-        - _progressiveSellForBNB(sellAmount) (src/VaultonToken.sol#251-253)
-                - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#339-347)
-        - _triggerBuybackAndBurn() (src/VaultonToken.sol#258)
-                - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#306-328)
+        - _progressiveSellForBNB(sellAmount) (src/VaultonToken.sol#236)
+                - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#320-328)
+        - _triggerBuybackAndBurn() (src/VaultonToken.sol#241-242)
+                - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#288-310)
         External calls sending eth:
-        - _triggerBuybackAndBurn() (src/VaultonToken.sol#258)
-                - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#306-328)
+        - _triggerBuybackAndBurn() (src/VaultonToken.sol#241-242)
+                - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#288-310)
         State variables written after the call(s):
-        - _triggerBuybackAndBurn() (src/VaultonToken.sol#258)
-                - lastBuybackBlock = currentBlockNumber (src/VaultonToken.sol#323-324)
-Reentrancy in Vaulton._triggerBuybackAndBurn() (src/VaultonToken.sol#283-328):
+        - _triggerBuybackAndBurn() (src/VaultonToken.sol#241-242)
+                - lastBuybackBlock = currentBlockNumber (src/VaultonToken.sol#305-306)
+Reentrancy in Vaulton._triggerBuybackAndBurn() (src/VaultonToken.sol#264-310):
         External calls:
-        - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#306-328)
+        - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#288-310)
         State variables written after the call(s):
-        - burnedTokens = newBurnedTokens (src/VaultonToken.sol#323)
-        - lastBuybackBlock = currentBlockNumber (src/VaultonToken.sol#323-324)
+        - burnedTokens = newBurnedTokens (src/VaultonToken.sol#304)
+        - lastBuybackBlock = currentBlockNumber (src/VaultonToken.sol#305-306)
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-2
 INFO:Detectors:
-Reentrancy in Vaulton._progressiveSellForBNB(uint256) (src/VaultonToken.sol#262-281):
+Reentrancy in Vaulton._progressiveSellForBNB(uint256) (src/VaultonToken.sol#245-261):
         External calls:
-        - _swapTokensForBNB(sellAmount) (src/VaultonToken.sol#270)
-                - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#339-347)
+        - _swapTokensForBNB(sellAmount) (src/VaultonToken.sol#254)
+                - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#320-328)
         Event emitted after the call(s):
-        - ProgressiveSale(sellAmount,bnbReceived) (src/VaultonToken.sol#277)
-Reentrancy in Vaulton._swapTokensForBNB(uint256) (src/VaultonToken.sol#330-347):
+        - ProgressiveSale(sellAmount,bnbReceived) (src/VaultonToken.sol#260-261)
+Reentrancy in Vaulton._swapTokensForBNB(uint256) (src/VaultonToken.sol#313-328):
         External calls:
-        - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#339-347)
+        - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#320-328)
         Event emitted after the call(s):
-        - SwapForBNBFailed(tokenAmount) (src/VaultonToken.sol#345-347)
-Reentrancy in Vaulton._transfer(address,address,uint256) (src/VaultonToken.sol#205-260):
+        - SwapForBNBFailed(tokenAmount) (src/VaultonToken.sol#328)
+Reentrancy in Vaulton._transfer(address,address,uint256) (src/VaultonToken.sol#186-243):
         External calls:
-        - _progressiveSellForBNB(sellAmount) (src/VaultonToken.sol#251-253)
-                - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#339-347)
-        - _triggerBuybackAndBurn() (src/VaultonToken.sol#258)
-                - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#306-328)
+        - _progressiveSellForBNB(sellAmount) (src/VaultonToken.sol#236)
+                - pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount,0,path,address(this),block.timestamp + 300) (src/VaultonToken.sol#320-328)
+        - _triggerBuybackAndBurn() (src/VaultonToken.sol#241-242)
+                - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#288-310)
         External calls sending eth:
-        - _triggerBuybackAndBurn() (src/VaultonToken.sol#258)
-                - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#306-328)
+        - _triggerBuybackAndBurn() (src/VaultonToken.sol#241-242)
+                - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#288-310)
         Event emitted after the call(s):
-        - BuybackBurn(0,bnbForBuyback) (src/VaultonToken.sol#294)
-                - _triggerBuybackAndBurn() (src/VaultonToken.sol#258)
-        - BuybackFailed(bnbForBuyback) (src/VaultonToken.sol#327-328)
-                - _triggerBuybackAndBurn() (src/VaultonToken.sol#258)
-Reentrancy in Vaulton._triggerBuybackAndBurn() (src/VaultonToken.sol#283-328):
+        - BuybackBurn(0,bnbForBuyback) (src/VaultonToken.sol#275-277)
+                - _triggerBuybackAndBurn() (src/VaultonToken.sol#241-242)
+        - BuybackFailed(bnbForBuyback) (src/VaultonToken.sol#309)
+                - _triggerBuybackAndBurn() (src/VaultonToken.sol#241-242)
+Reentrancy in Vaulton._triggerBuybackAndBurn() (src/VaultonToken.sol#264-310):
         External calls:
-        - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#306-328)
+        - pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbForBuyback}(0,path,burnAddress,block.timestamp + 300) (src/VaultonToken.sol#288-310)
         Event emitted after the call(s):
-        - BuybackFailed(bnbForBuyback) (src/VaultonToken.sol#327-328)
+        - BuybackFailed(bnbForBuyback) (src/VaultonToken.sol#309)
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-3
 INFO:Detectors:
 3 different versions of Solidity are used:

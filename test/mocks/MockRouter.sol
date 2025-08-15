@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import "./ITestUniswapV2Router02.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "forge-std/console.sol"; // Ajout de cet import
+import "forge-std/console.sol"; // Added this import
 
 contract MockRouter is ITestUniswapV2Router02 {
     address private immutable _WETH;
@@ -13,8 +13,8 @@ contract MockRouter is ITestUniswapV2Router02 {
     uint256 public reserveETH = 1000 ether; // 1000 BNB in pool (~$300k liquidity)
 
     bool public forceRevert;
-    uint256 public slippagePercent = 50; // 0.5% slippage par défaut
-    uint256 public feePercent = 25; // 0.25% PancakeSwap fees
+    uint256 public slippagePercent = 50; // Default slippage 0.5%
+    uint256 public feePercent = 25; // PancakeSwap fee 0.25%
 
     address[] private defaultPath;
     bool private pathSet = false;
@@ -48,7 +48,7 @@ contract MockRouter is ITestUniswapV2Router02 {
 
     // Correction: function can be pure, not view
     function getPair(address, address) external pure returns (address) {
-        // Retourne toujours le même pair pour simplifier le test
+        // Always returns the same pair for test simplification
         return address(0xBEEF);
     }
 
@@ -123,11 +123,11 @@ contract MockRouter is ITestUniswapV2Router02 {
         address,
         uint256
     ) external payable override returns (uint256 amountToken, uint256 amountETH, uint256 liquidity) {
-        // Simuler l'ajout de liquidité
+        // Simulate adding liquidity
         reserveToken += amountTokenDesired;
         reserveETH += msg.value;
 
-        // Retourner les montants ajoutés
+        // Return the added amounts
         return (amountTokenDesired, msg.value, 1);
     }
 

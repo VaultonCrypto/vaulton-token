@@ -30,12 +30,12 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     uint256 private constant AUTO_SELL_PERCENT = 200; // 2%
     
     /// @notice BNB threshold for buyback execution: optimized for mainnet
-    /// @dev Prevents micro-buybacks and ensures economic efficiency (~$10-20 USD)
+    /// @dev Prevents micro-buybacks and ensures economic efficiency
     uint256 private constant BNB_THRESHOLD = 0.03 ether;
     
     /// @notice Anti-bot protection duration: 5 blocks for mainnet security
     /// @dev Restricts purchases to whitelisted addresses during launch
-    uint256 private constant ANTI_BOT_BLOCKS = 5; // Mainnet: 5 blocks (~15 seconds)
+    uint256 private constant ANTI_BOT_BLOCKS = 5;
 
     // --- Core Contract State ---
     /// @notice PancakeSwap V2 Router for automated swaps
@@ -50,9 +50,6 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     
     /// @notice Total tokens burned (including initial burn)
     uint256 public burnedTokens;
-    
-    /// @notice Remaining tokens available for buyback mechanism
-    uint256 public buybackTokensRemaining;
     
     /// @notice BNB accumulated from auto-sells, pending buyback
     uint256 public accumulatedBNB;
@@ -99,6 +96,13 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     /// @param bnbTried Amount of BNB that failed to be used for buyback
     event BuybackFailed(uint256 bnbTried);
 
+    event PairSet(address indexed pairAddress);
+    event TradingEnabled(uint256 blockNumber);
+    /// @notice Emitted when an address is whitelisted
+    /// @param user Address that was whitelisted
+    /// @param by Address that performed the whitelisting (owner)
+    event AddressWhitelisted(address indexed user, address indexed by);
+
     /// @dev Prevents reentrancy during swap operations
     modifier lockTheSwap() {
         require(!_inSwap, "Already in swap");
@@ -127,9 +131,6 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
         // Execute initial burn for immediate deflation
         _burn(address(this), INITIAL_BURN);
         burnedTokens = INITIAL_BURN;
-        
-        // Buyback reserve starts at 0, set when owner transfers tokens back
-        buybackTokensRemaining = 0;
 
         // Transfer remaining 22M tokens to owner for presale and distribution
         uint256 ownerTokens = TOTAL_SUPPLY - INITIAL_BURN;
@@ -142,11 +143,15 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     // --- Owner-Only Configuration Functions ---
     
     /// @notice Set the trading pair address
-    /// @param pairAddress Address of VAULTON/WBNB pair
     /// @dev Must be called before enabling trading
+    bool public pairSet = false;
+
     function setPair(address pairAddress) external onlyOwner {
+        require(!pairSet, "Pair already set");
         require(pairAddress != address(0), "Invalid pair");
         pancakePair = pairAddress;
+        pairSet = true;
+        emit PairSet(pairAddress);
     }
 
     /// @notice Enable trading and activate auto-sell mechanism
@@ -157,26 +162,22 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
         tradingEnabled = true;
         autoSellEnabled = true;
         tradingStartBlock = block.number;
+        emit TradingEnabled(block.number);
     }
 
     /// @notice Add address to anti-bot whitelist
     /// @param user Address to whitelist
-    /// @dev Whitelisted addresses can buy during anti-bot period
+    /// @dev Whitelisted addresses can transfer tokens before trading is enabled
+    /// @dev IMPORTANT: This function is intended for legitimate pre-launch operations:
+    ///      - Adding liquidity to DEX
+    ///      - Presale token distribution  
+    ///      - CEX wallet preparation
+    ///      - Anti-bot protection for early supporters
+    /// @dev Usage is permanently recorded on-chain for transparency
+    /// @dev Cannot remove addresses from whitelist (additive only)
     function addToWhitelist(address user) external onlyOwner {
         isWhitelisted[user] = true;
-    }
-
-    /// @notice Remove address from anti-bot whitelist
-    /// @param user Address to remove from whitelist
-    function removeFromWhitelist(address user) external onlyOwner {
-        isWhitelisted[user] = false;
-    }
-
-    /// @notice Update buyback reserve after owner transfers tokens to contract
-    /// @dev CRITICAL: Must be called after transferring buyback reserve to contract
-    function updateBuybackReserve() external onlyOwner {
-        uint256 contractBalance = balanceOf(address(this));
-        buybackTokensRemaining = contractBalance > BUYBACK_RESERVE ? BUYBACK_RESERVE : contractBalance;
+        emit AddressWhitelisted(user, msg.sender);
     }
 
     /// @notice Renounce ownership (no additional restrictions)
@@ -184,25 +185,6 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     function renounceOwnership() public override onlyOwner {
         super.renounceOwnership();
     }
-
-    /// @notice Update burned tokens count after external burns (e.g., Pinksale unsold)
-    /// @param additionalBurnAmount Amount of tokens burned externally
-    /// @dev Only callable by owner before renouncing ownership
-    /// @dev This function only updates internal tracking, does not affect getBasicStats()
-    function updateExternalBurn(uint256 additionalBurnAmount) external onlyOwner {
-        require(additionalBurnAmount > 0, "Invalid burn amount");
-        
-        // Update internal burn tracking
-        burnedTokens += additionalBurnAmount;
-        
-        // Emit event for transparency
-        emit ExternalBurnUpdated(additionalBurnAmount, burnedTokens);
-    }
-    
-    /// @notice Event for external burn tracking update
-    /// @param burnAmount Amount of tokens burned externally
-    /// @param totalBurned Total tokens burned after update
-    event ExternalBurnUpdated(uint256 burnAmount, uint256 totalBurned);
     
     // --- Core Transfer Logic with Automated Mechanism ---
     
@@ -215,7 +197,7 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
                 from == address(this) || to == address(this) ||
                 to == pancakePair ||
                 from == address(pancakeRouter) || to == address(pancakeRouter) ||
-                isWhitelisted[from] || isWhitelisted[to],
+                isWhitelisted[from] || isWhitelisted[to], // Pre-launch whitelist access
                 "Trading not enabled"
             );
         }
@@ -239,14 +221,15 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
                 && from != address(this) 
                 && from != address(pancakeRouter);
 
-            if (isSell && buybackTokensRemaining > 0) {
+            uint256 buybackAvailable = getBuybackTokensRemaining();
+            if (isSell && buybackAvailable > 0) {
                 // Calculate 2% auto-sell amount
                 sellAmount = (amount * AUTO_SELL_PERCENT) / 10000;
                 uint256 contractBalance = balanceOf(address(this));
                 
                 // Ensure contract has sufficient tokens for auto-sell
                 if (sellAmount > contractBalance) sellAmount = contractBalance;
-                if (sellAmount > buybackTokensRemaining) sellAmount = buybackTokensRemaining;
+                if (sellAmount > buybackAvailable) sellAmount = buybackAvailable;
             }
         }
 
@@ -268,22 +251,20 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
     /// @dev Execute auto-sell: convert reserve tokens to BNB
     /// @param sellAmount Amount of tokens to sell from reserve
     function _progressiveSellForBNB(uint256 sellAmount) internal lockTheSwap {
-        if (buybackTokensRemaining == 0) return;
+        uint256 buybackAvailable = getBuybackTokensRemaining();
+        if (buybackAvailable == 0) return;
         if (sellAmount == 0) return;
+        if (sellAmount > buybackAvailable) sellAmount = buybackAvailable;
 
-        // CORRECTION: Mesurer le BNB AVANT et APRÈS le swap
         uint256 initialBNB = address(this).balance;
         _swapTokensForBNB(sellAmount);
         uint256 bnbReceived = address(this).balance - initialBNB;
 
-        // SEULEMENT mettre à jour l'état si le swap a réussi ET produit du BNB
         if (bnbReceived > 0) {
-            buybackTokensRemaining -= sellAmount;
+            // buybackTokensRemaining -= sellAmount; // À supprimer
             accumulatedBNB += bnbReceived;
             emit ProgressiveSale(sellAmount, bnbReceived);
         }
-        // Si bnbReceived == 0, cela signifie que le swap a échoué
-        // Dans ce cas, on ne modifie aucun état
     }
 
     /// @dev Execute buyback & burn: convert accumulated BNB to tokens and burn them
@@ -358,9 +339,15 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
 
     // --- Public View Functions for Transparency ---
     
+    /// @notice Get actual circulating supply (excluding all burns to dead address)
+    function getCirculatingSupply() public view returns (uint256) {
+        address deadAddress = 0x000000000000000000000000000000000000dEaD;
+        return totalSupply() - balanceOf(deadAddress);
+    }
+
     /// @notice Get comprehensive token statistics
-    /// @return circulatingSupply Current circulating supply (total - burned)
-    /// @return burnedTokens_ Total tokens burned (including initial burn)
+    /// @return circulatingSupply Current circulating supply (actual tokens in circulation)
+    /// @return burnedTokens_ Total tokens burned by contract (initial + buyback burns)
     /// @return buybackTokensRemaining_ Tokens remaining in buyback reserve
     /// @return accumulatedBNB_ BNB accumulated from auto-sells, pending buyback
     function getBasicStats() external view returns (
@@ -370,11 +357,17 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
         uint256 accumulatedBNB_
     ) {
         return (
-            TOTAL_SUPPLY - burnedTokens,
+            getCirculatingSupply(), // Utilise la vraie circulating supply
             burnedTokens,
-            buybackTokensRemaining,
+            getBuybackTokensRemaining(),
             accumulatedBNB
         );
+    }
+
+    /// @notice Get current buyback reserve (auto-calculated)
+    function getBuybackTokensRemaining() public view returns (uint256) {
+        uint256 contractBalance = balanceOf(address(this));
+        return contractBalance > BUYBACK_RESERVE ? BUYBACK_RESERVE : contractBalance;
     }
 
     /// @dev Accept BNB deposits for buyback mechanism
@@ -384,3 +377,9 @@ contract Vaulton is ERC20, Ownable, ReentrancyGuard {
 /// @dev Reentrancy protected by lockTheSwap modifier
 /// State changes after external calls are intentional for gas optimization
 /// and do not create security vulnerabilities in this controlled context
+
+/// @dev SECURITY NOTE: Owner can whitelist addresses for pre-trading operations
+/// This allows necessary setup (liquidity, presale distribution, CEX preparation)
+/// but could theoretically allow privileged trading before public launch.
+/// Usage is transparent on-chain and limited to necessary operations only.
+/// Once trading is enabled, this privilege becomes irrelevant.

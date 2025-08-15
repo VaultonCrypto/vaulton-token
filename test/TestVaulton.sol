@@ -8,18 +8,18 @@ contract TestVaulton is Vaulton {
         Vaulton(router, cexWallet) // FIX: Only 2 arguments
     {}
 
-    // Remplace la fonction interne pour les tests
+    // Override the internal function for testing
     function _swapBNBForTokens(uint256 bnbAmount, uint256) internal pure returns (uint256) {
         // Simulate a successful swap: just return bnbAmount as tokens
         return bnbAmount;
     }
 
-    // Pour les tests, on peut simuler le BNB reçu
+    // For testing, you can simulate BNB received
     function simulateBNBReceived() external payable {
-        // Cette fonction permet d'ajouter du BNB au contrat pour les tests
+        // This function allows adding BNB to the contract for testing
     }
     
-    // Si tu veux vraiment une fonction pour définir un montant spécifique pour les tests
+    // If you really want a function to set a specific amount for tests
     function getBNBBalance() external view returns (uint256) {
         return address(this).balance;
     }

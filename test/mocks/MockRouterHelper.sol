@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract MockRouterHelper is ITestUniswapV2Router02 {
     address public immutable override WETH;
-    address private _factory; // au lieu de address public factory;
+    address private _factory;
 
     constructor() {
         // These will be ignored in the test as we're using etch to override

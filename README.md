@@ -5,23 +5,25 @@
 
 > **The Zero-Fee Token That Burns Itself**
 
-Vaulton is a revolutionary BSC token engineered for institutional adoption through hardcoded smart contract security and progressive, transparent scarcity. Each sell triggers a 2% mechanism that accumulates BNB for automated buyback and burn cycles - creating mathematical buying pressure without any transaction fees.
+Vaulton is a revolutionary BSC token engineered for institutional adoption through hardcoded smart contract security and progressive, transparent scarcity. Each sell triggers a 2% mechanism that accumulates BNB for automated buyback and burn cycles—creating mathematical buying pressure without any transaction fees.
 
 ## 🚀 Key Features
 
-- **🆓 Zero Transaction Fees**: No taxes ever - true deflation without taxing holders
+- **🆓 Zero Transaction Fees**: No taxes ever—true deflation without taxing holders
 - **🔥 Auto-Deflation**: Automated buyback and burn mechanism
-- **🏛️ Institutional Security**: 85% of tokens locked, burned, or in automated systems
-- **👥 Community-First**: 95% of tokens reserved for the community
+- **🏛️ Institutional Security**: 85% of tokens locked, reserved, or in automated systems
+- **👥 Community-First**: 93.2% of tokens reserved for the community
 - **🔒 Immutable Rules**: Hardcoded rules that cannot be changed after deployment
-- **📈 Price Support**: 33% of supply dedicated to buyback reserves
+- **📈 Price Support**: 45.5% of supply dedicated to buyback reserves
 
-## 📊 Tokenomics
+## 📊 Tokenomics (V2)
 
-- **Total Supply**: 30,000,000 VAULTON
-- **Initial Burn**: 8,000,000 tokens (26.7%)
-- **Buyback Reserve**: 10,000,000 tokens (33.3%)
-- **Community Allocation**: 12,000,000 tokens (40%)
+- **Total Supply**: 22,000,000 VAULTON
+- **Buyback Reserve**: 10,000,000 tokens (45.5%)
+- **Presale**: 4,500,000 tokens (20.5%)
+- **Liquidity**: 2,180,250 tokens (9.9%)
+- **CEX Reserves**: 3,820,000 tokens (17.4%)
+- **Team**: 1,500,000 tokens (6.8%)
 - **Auto-Sell Trigger**: 2% of each sell transaction
 - **Buyback Threshold**: 0.03 BNB
 
@@ -97,19 +99,7 @@ The Vaulton smart contract has been analyzed using Slither, a static analysis fr
 - **Token Name**: Vaulton
 - **Symbol**: VAULTON
 - **Decimals**: 18
-- **Contract Address**: *Will be published after deployment*
-
-## 🤝 Contributing
-
-We welcome contributions to improve the Vaulton ecosystem:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-Please read our contributing guidelines and ensure all tests pass.
+- **Contract Address**: 0x919dd941df254109143f7796661D7832E236E4eb
 
 ## 📄 License
 
